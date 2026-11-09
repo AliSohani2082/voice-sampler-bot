@@ -14,11 +14,12 @@ The first build needs internet access to download Go modules and container image
 ## Participant flow
 
 - `/start` offers English or فارسی. The choice is saved per participant and can be changed by sending `/start` again; it changes the bot's prompts and buttons, not the recordings or transcripts.
+- The welcome message explains Professor Zahedi's Statistical Machine Learning assignment: 20 sleepy/awake pairs of about five seconds each for a semester-end machine learning dataset, and credits @ali2082. Telegram's bottom Menu lists the commands; inline buttons suggest the next action.
 - `/new` starts a new pair. The bot asks for a sleepy Telegram voice note, then offers **Submit** or **Record a new one**. It asks the participant to type what they said.
 - The bot repeats this for the awake voice and reminds them to say the same sentence. Each later pair may use another sentence.
 - Aim for five seconds. Telegram voice notes reporting more than ten seconds are rejected. The bot does not transcribe audio or compare the two typed sentences.
 - `/my` lists submitted pairs and offers controls to replay either recording, replace either recording, edit either transcript, or permanently delete a pair and both audio files.
-- `/cancel` discards an unfinished pair. Starting `/new` also discards an unfinished pair. In-progress work survives a bot restart.
+- `/cancel` discards an unfinished pair. Starting `/new` while a pair is unfinished asks for confirmation before discarding it. In-progress work survives a bot restart.
 
 The bot stores the participant's Telegram numeric ID, Telegram file ID and unique file ID, reported duration, downloaded byte count, MIME type, transcript, timestamps, and bucket object key. The recordings remain private in MinIO. A startup and periodic cleanup job retries failed object deletions.
 

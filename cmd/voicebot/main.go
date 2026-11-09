@@ -71,6 +71,9 @@ func main() {
 	if err := a.call(ctx, "deleteWebhook", map[string]any{"drop_pending_updates": false}, nil); err != nil {
 		log.Fatal(err)
 	}
+	if err := a.registerMenu(ctx); err != nil {
+		log.Fatal(err)
+	}
 	log.Print("bot started")
 	a.poll(ctx)
 }

@@ -11,6 +11,12 @@ import (
 	"github.com/minio/minio-go/v7"
 )
 
+const welcome = "Hi! 👋 This bot helps collect voice samples for Professor Zahedi's (زاهدی) Statistical Machine Learning class. Each student is asked to record 20 pairs: one sleepy and one awake voice note per pair, about 5 seconds each. At the end of the semester, these recordings will form a dataset for a machine learning project. Say the same sentence in both notes and type what you said after each. Notes over 10 seconds are rejected. Your audio and text stay stored until you delete a pair. Created by @ali2082. Choose an option below or open the Menu beside the message field."
+
+func actionButtons() [][]map[string]string {
+	return [][]map[string]string{{button("Record a pair", "action:new"), button("My pairs", "action:my")}, {button("Help", "action:help")}}
+}
+
 func (a *app) handleMessage(ctx context.Context, m *message) error {
 	userID := m.From.ID
 	if strings.HasPrefix(m.Text, "/") {
@@ -19,15 +25,15 @@ func (a *app) handleMessage(ctx context.Context, m *message) error {
 		case "/start":
 			return a.send(ctx, userID, "Choose your language / زبان خود را انتخاب کنید:", [][]map[string]string{{button("English", "lang:en"), button("فارسی", "lang:fa")}})
 		case "/help":
-			return a.send(ctx, userID, "Send one sleepy and one awake Telegram voice note per pair. Aim for 5 seconds; clips over 10 seconds are rejected. Say the same sentence in both notes and type what you said for each. I store the audio and text until you delete the pair. Use /new to start, /my to view or edit your pairs, and /cancel to stop an unfinished pair.", nil)
+			return a.send(ctx, userID, welcome, actionButtons())
 		case "/new":
-			return a.startPair(ctx, userID)
+			return a.startPair(ctx, userID, false)
 		case "/my":
 			return a.listPairs(ctx, userID, 0)
 		case "/cancel":
 			return a.cancel(ctx, userID)
 		default:
-			return a.send(ctx, userID, "Use /new, /my, or /cancel.", nil)
+			return a.send(ctx, userID, "Choose an option below or open the Menu for commands.", actionButtons())
 		}
 	}
 	s, err := a.getSession(ctx, userID)
@@ -35,7 +41,7 @@ func (a *app) handleMessage(ctx context.Context, m *message) error {
 		return err
 	}
 	if s.Stage == "" {
-		return a.send(ctx, userID, "Use /new to start a pair or /my to see previous pairs.", nil)
+		return a.send(ctx, userID, "Ready for another pair?", actionButtons())
 	}
 	if strings.HasPrefix(s.Stage, "voice:") || strings.HasPrefix(s.Stage, "editvoice:") {
 		if m.Voice == nil {
@@ -87,7 +93,7 @@ func (a *app) handleMessage(ctx context.Context, m *message) error {
 		if err := a.clearSession(ctx, userID); err != nil {
 			return err
 		}
-		return a.send(ctx, userID, "Pair saved. Use /new for another pair or /my to view, edit, or delete your pairs.", nil)
+		return a.send(ctx, userID, "Pair saved. Record another pair or view your pairs below.", actionButtons())
 	}
 	return a.send(ctx, userID, "Use the Submit or Record a new one button under your last recording.", nil)
 }
@@ -110,7 +116,27 @@ func (a *app) handleCallback(ctx context.Context, userID int64, data string) err
 			return err
 		}
 		ctx = withLanguage(ctx, parts[1])
-		return a.send(ctx, userID, "Send one sleepy and one awake Telegram voice note per pair. Aim for 5 seconds; clips over 10 seconds are rejected. Say the same sentence in both notes and type what you said for each. I store the audio and text until you delete the pair. Use /new to start, /my to view or edit your pairs, and /cancel to stop an unfinished pair.", nil)
+		return a.send(ctx, userID, welcome, actionButtons())
+	case "action":
+		if len(parts) != 2 {
+			break
+		}
+		switch parts[1] {
+		case "new":
+			return a.startPair(ctx, userID, false)
+		case "my":
+			return a.listPairs(ctx, userID, 0)
+		case "help":
+			return a.send(ctx, userID, welcome, actionButtons())
+		}
+	case "newyes":
+		if len(parts) == 2 && parts[1] == s.PairID && s.Stage != "" && !strings.HasPrefix(s.Stage, "edit") {
+			return a.startPair(ctx, userID, true)
+		}
+	case "keep":
+		if len(parts) == 1 {
+			return a.send(ctx, userID, "Okay. Continue your current pair using the latest prompt, or use /cancel to discard it.", nil)
+		}
 	case "accept", "retry":
 		if len(parts) != 2 || s.Nonce == "" || parts[1] != s.Nonce || s.Candidate == nil || !(strings.HasPrefix(s.Stage, "confirm:") || strings.HasPrefix(s.Stage, "editconfirm:")) {
 			return a.send(ctx, userID, "That recording choice has expired. Follow the latest prompt.", nil)
@@ -233,12 +259,15 @@ func (a *app) handleCallback(ctx context.Context, userID int64, data string) err
 	return a.send(ctx, userID, "That button is no longer valid. Use /my to see your pairs.", nil)
 }
 
-func (a *app) startPair(ctx context.Context, userID int64) error {
+func (a *app) startPair(ctx context.Context, userID int64, confirmed bool) error {
 	s, err := a.getSession(ctx, userID)
 	if err != nil {
 		return err
 	}
 	if s.Stage != "" && !strings.HasPrefix(s.Stage, "edit") && s.PairID != "" {
+		if !confirmed {
+			return a.send(ctx, userID, "Starting a new pair will discard your unfinished pair. Start over?", [][]map[string]string{{button("Start over", "newyes:"+s.PairID), button("Keep current pair", "keep")}})
+		}
 		if err := a.markDeleting(ctx, userID, s.PairID); err != nil {
 			return err
 		}
@@ -275,7 +304,7 @@ func (a *app) cancel(ctx context.Context, userID int64) error {
 	if err := a.clearSession(ctx, userID); err != nil {
 		return err
 	}
-	return a.send(ctx, userID, "Stopped. Use /new whenever you want to start a new pair.", nil)
+	return a.send(ctx, userID, "Stopped. Choose what to do next.", actionButtons())
 }
 
 func (a *app) listPairs(ctx context.Context, userID int64, page int) error {
@@ -314,7 +343,7 @@ func (a *app) listPairs(ctx context.Context, userID int64, page int) error {
 		buttons = append(buttons, nav)
 	}
 	if len(buttons) == 0 {
-		return a.send(ctx, userID, "No submitted pairs yet. Use /new to start.", nil)
+		return a.send(ctx, userID, "No submitted pairs yet. Ready to record your first pair?", actionButtons())
 	}
 	return a.send(ctx, userID, "Your submitted pairs:", buttons)
 }
