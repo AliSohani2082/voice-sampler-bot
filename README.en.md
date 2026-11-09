@@ -5,11 +5,11 @@ A private Telegram bot for collecting paired sleepy and awake voice notes. The b
 ## Start
 
 1. Create a bot with Telegram's BotFather and copy its token.
-2. Copy `.env.example` to `.env`. Set `TELEGRAM_BOT_TOKEN`, comma-separated numeric `ALLOWED_USER_IDS`, and two long, different passwords. Keep `.env` private.
+2. Copy `.env.example` to `.env`. Set `TELEGRAM_BOT_TOKEN`, the admin's numeric `ADMIN_TELEGRAM_ID`, and two long, different passwords. `ALLOWED_USER_IDS` is optional for seeding initial users. Keep `.env` private.
 3. Run `docker compose up --build -d`.
 4. Run `docker compose logs -f bot` to confirm the bot started, then open a private chat with it and send `/start`.
 
-The first build needs internet access to download Go modules and container images. The bot polls Telegram, so no inbound port or public domain is needed. Only allowlisted Telegram user IDs can use it, and it ignores group chats. To change the allowlist, edit `.env` and run `docker compose up -d --force-recreate bot`.
+The first build needs internet access to download Go modules and container images. The bot polls Telegram, so no inbound port or public domain is needed. Only allowlisted Telegram user IDs can use it, and it ignores group chats. The admin can change the allowlist through the bot; changes are saved in PostgreSQL and survive restarts. IDs in `ALLOWED_USER_IDS` seed the list at startup, while admin removals take precedence over that env value.
 
 ## Participant flow
 
@@ -20,6 +20,10 @@ The first build needs internet access to download Go modules and container image
 - Aim for five seconds. Telegram voice notes reporting more than ten seconds are rejected. The bot does not transcribe audio or compare the two typed sentences.
 - `/my` lists submitted pairs and offers controls to replay either recording, replace either recording, edit either transcript, or permanently delete a pair and both audio files.
 - `/cancel` discards an unfinished pair. Starting `/new` while a pair is unfinished asks for confirmation before discarding it. In-progress work survives a bot restart.
+
+## Admin commands
+
+The `ADMIN_TELEGRAM_ID` user can use `/stats` for user, pair, recording, and storage totals; `/users` to browse users and open their submitted pairs; `/allow 123456789` and `/unallow 123456789` to change access; and `/broadcast your message` to send text to every currently allowlisted user who has chatted with the bot. A user's record view also has an allowlist button. The admin can read transcripts and play recordings, but the admin view has no edit or delete controls. Broadcasts exclude the admin and report failed deliveries. Users who have never opened a private chat with the bot cannot receive a broadcast.
 
 The bot stores the participant's Telegram numeric ID, Telegram file ID and unique file ID, reported duration, downloaded byte count, MIME type, transcript, timestamps, and bucket object key. The recordings remain private in MinIO. A startup and periodic cleanup job retries failed object deletions.
 

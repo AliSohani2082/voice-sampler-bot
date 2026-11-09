@@ -21,6 +21,18 @@ func (a *app) handleMessage(ctx context.Context, m *message) error {
 	userID := m.From.ID
 	if strings.HasPrefix(m.Text, "/") {
 		command := strings.SplitN(strings.Fields(m.Text)[0], "@", 2)[0]
+		if a.cfg.adminID != 0 && userID == a.cfg.adminID {
+			switch command {
+			case "/stats":
+				return a.adminStats(ctx)
+			case "/users":
+				return a.adminUsers(ctx, 0)
+			case "/broadcast":
+				return a.broadcast(ctx, strings.TrimSpace(strings.TrimPrefix(m.Text, strings.Fields(m.Text)[0])))
+			case "/allow", "/unallow":
+				return a.setAllowed(ctx, strings.TrimSpace(strings.TrimPrefix(m.Text, strings.Fields(m.Text)[0])), command == "/allow")
+			}
+		}
 		switch command {
 		case "/start":
 			return a.send(ctx, userID, "Choose your language / زبان خود را انتخاب کنید:", [][]map[string]string{{button("English", "lang:en"), button("فارسی", "lang:fa")}})
@@ -99,6 +111,9 @@ func (a *app) handleMessage(ctx context.Context, m *message) error {
 }
 
 func (a *app) handleCallback(ctx context.Context, userID int64, data string) error {
+	if a.cfg.adminID != 0 && userID == a.cfg.adminID && strings.HasPrefix(data, "admin:") {
+		return a.handleAdminCallback(ctx, data)
+	}
 	parts := strings.Split(data, ":")
 	if len(parts) == 0 {
 		return nil
