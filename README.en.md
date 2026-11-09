@@ -25,6 +25,8 @@ The bot stores the participant's Telegram numeric ID, Telegram file ID and uniqu
 
 ## Access the data
 
+Open Adminer at `http://127.0.0.1:8080` to browse and edit PostgreSQL data. Select **PostgreSQL** and sign in with server `postgres`, user `voicebot`, database `voicebot`, and `POSTGRES_PASSWORD` from `.env`.
+
 The MinIO console is available on the Docker host at `http://127.0.0.1:9001` with `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` from `.env`. The S3 API is at `http://127.0.0.1:9000`; the bucket defaults to `voice-samples`. Object keys look like `<telegram-user-id>/<pair-id>/<sleepy-or-awake>/<random-id>.ogg`.
 
 For metadata, run:

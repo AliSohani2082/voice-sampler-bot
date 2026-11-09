@@ -28,6 +28,8 @@
 
 ## دسترسی به داده‌ها
 
+برای دیدن و ویرایش داده‌های PostgreSQL، Adminer را در `http://127.0.0.1:8080` باز کنید. گزینهٔ **PostgreSQL** را انتخاب کنید و با سرور `postgres`، کاربر `voicebot`، پایگاه‌دادهٔ `voicebot` و مقدار `POSTGRES_PASSWORD` از فایل `.env` وارد شوید.
+
 کنسول MinIO روی میزبان Docker در نشانی `http://127.0.0.1:9001` در دسترس است. برای ورود از `MINIO_ROOT_USER` و `MINIO_ROOT_PASSWORD` در `.env` استفاده کنید. درگاه S3 در `http://127.0.0.1:9000` است و نام پیش‌فرض مخزن `voice-samples` است. کلید فایل‌ها قالبی مانند `<telegram-user-id>/<pair-id>/<sleepy-or-awake>/<random-id>.ogg` دارد.
 
 برای دریافت فراداده‌ها:
