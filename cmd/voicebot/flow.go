@@ -25,7 +25,8 @@ func (a *app) handleMessage(ctx context.Context, m *message) error {
 				a.broadcastPending = false
 				return a.send(ctx, userID, "Broadcast canceled.", nil)
 			}
-		} else if strings.TrimSpace(m.Text) == "" {
+		}
+		if strings.TrimSpace(m.Text) == "" {
 			return a.send(ctx, userID, "Please send the text to broadcast, or use /cancel.", nil)
 		} else if len([]rune(m.Text)) > 4096 {
 			return a.send(ctx, userID, "That message is too long. Send up to 4096 characters, or use /cancel.", nil)
@@ -43,8 +44,11 @@ func (a *app) handleMessage(ctx context.Context, m *message) error {
 			case "/users":
 				return a.adminUsers(ctx, 0)
 			case "/broadcast":
+				if err := a.send(ctx, userID, "Send the text to broadcast in your next message. Use /cancel to cancel.", nil); err != nil {
+					return err
+				}
 				a.broadcastPending = true
-				return a.send(ctx, userID, "Send the text to broadcast in your next message. Use /cancel to cancel.", nil)
+				return nil
 			case "/allow", "/unallow":
 				return a.setAllowed(ctx, strings.TrimSpace(strings.TrimPrefix(m.Text, strings.Fields(m.Text)[0])), command == "/allow")
 			}

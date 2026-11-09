@@ -205,7 +205,7 @@ func (a *app) setAllowed(ctx context.Context, rawID string, allowed bool) error 
 	}
 	if allowed {
 		a.cfg.allowed[id] = true
-		return a.send(ctx, a.cfg.adminID, fmt.Sprintf("User %d added to the allowlist and /users. They must open a private chat with the bot before it can deliver messages to them.", id), nil)
+		return a.send(ctx, a.cfg.adminID, fmt.Sprintf("User %d added to the allowlist and /users. They must send /start to the bot before it can deliver messages to them.", id), nil)
 	}
 	delete(a.cfg.allowed, id)
 	return a.send(ctx, a.cfg.adminID, fmt.Sprintf("User %d removed from the allowlist.", id), nil)
