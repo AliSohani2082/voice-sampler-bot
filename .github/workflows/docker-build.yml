@@ -1,0 +1,24 @@
+name: Docker build
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-images:
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_PASSWORD: ci-only
+      MINIO_ROOT_USER: ci
+      MINIO_ROOT_PASSWORD: ci-only
+      TELEGRAM_BOT_TOKEN: ci
+      ALLOWED_USER_IDS: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - name: Pull service images
+        run: docker compose pull postgres minio
+      - name: Build bot image
+        run: docker compose build bot
