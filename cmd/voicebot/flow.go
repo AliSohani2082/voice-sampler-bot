@@ -1,0 +1,321 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/minio/minio-go/v7"
+)
+
+func (a *app) handleMessage(ctx context.Context, m *message) error {
+	userID := m.From.ID
+	if strings.HasPrefix(m.Text, "/") {
+		command := strings.SplitN(strings.Fields(m.Text)[0], "@", 2)[0]
+		switch command {
+		case "/start", "/help":
+			return a.send(ctx, userID, "Send one sleepy and one awake Telegram voice note per pair. Aim for 5 seconds; clips over 10 seconds are rejected. Say the same sentence in both notes and type what you said for each. I store the audio and text until you delete the pair. Use /new to start, /my to view or edit your pairs, and /cancel to stop an unfinished pair.", nil)
+		case "/new":
+			return a.startPair(ctx, userID)
+		case "/my":
+			return a.listPairs(ctx, userID, 0)
+		case "/cancel":
+			return a.cancel(ctx, userID)
+		default:
+			return a.send(ctx, userID, "Use /new, /my, or /cancel.", nil)
+		}
+	}
+	s, err := a.getSession(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if s.Stage == "" {
+		return a.send(ctx, userID, "Use /new to start a pair or /my to see previous pairs.", nil)
+	}
+	if strings.HasPrefix(s.Stage, "voice:") || strings.HasPrefix(s.Stage, "editvoice:") {
+		if m.Voice == nil {
+			return a.send(ctx, userID, "Please send a Telegram voice message, not a file or text. Aim for 5 seconds.", nil)
+		}
+		if m.Voice.Duration > 10 || m.Voice.Duration < 1 {
+			return a.send(ctx, userID, "That recording must be between 1 and 10 seconds. Please try again and aim for 5 seconds.", nil)
+		}
+		if m.Voice.FileSize > maxVoiceBytes {
+			return a.send(ctx, userID, "That recording is too large for Telegram's bot download limit. Please record a shorter note.", nil)
+		}
+		s.Candidate = m.Voice
+		s.Nonce = randomID()
+		s.Stage = strings.Replace(s.Stage, "voice:", "confirm:", 1)
+		s.Stage = strings.Replace(s.Stage, "editvoice:", "editconfirm:", 1)
+		if err := a.putSession(ctx, userID, s); err != nil {
+			return err
+		}
+		return a.send(ctx, userID, fmt.Sprintf("This voice note is %d seconds. Submit it or record a new one?", m.Voice.Duration), [][]map[string]string{{button("Submit", "accept:"+s.Nonce), button("Record a new one", "retry:"+s.Nonce)}})
+	}
+	if strings.HasPrefix(s.Stage, "text:") || strings.HasPrefix(s.Stage, "edittext:") {
+		transcript := strings.TrimSpace(m.Text)
+		if transcript == "" || len([]rune(transcript)) > 1000 {
+			return a.send(ctx, userID, "Please type what you said (up to 1,000 characters).", nil)
+		}
+		kind := strings.TrimPrefix(strings.TrimPrefix(s.Stage, "edittext:"), "text:")
+		if err := a.saveTranscript(ctx, userID, s.PairID, kind, transcript); err != nil {
+			return err
+		}
+		if strings.HasPrefix(s.Stage, "edittext:") {
+			if err := a.clearSession(ctx, userID); err != nil {
+				return err
+			}
+			if err := a.send(ctx, userID, "Transcript updated. Please keep both recordings in the pair on the same sentence.", nil); err != nil {
+				return err
+			}
+			return a.showPair(ctx, userID, s.PairID)
+		}
+		if kind == "sleepy" {
+			s.Stage = "voice:awake"
+			if err := a.putSession(ctx, userID, s); err != nil {
+				return err
+			}
+			return a.send(ctx, userID, "Now record your awake voice. Say the same sentence as in the sleepy note. Aim for 5 seconds; 10 seconds maximum.", nil)
+		}
+		if err := a.completePair(ctx, userID, s.PairID); err != nil {
+			return err
+		}
+		if err := a.clearSession(ctx, userID); err != nil {
+			return err
+		}
+		return a.send(ctx, userID, "Pair saved. Use /new for another pair or /my to view, edit, or delete your pairs.", nil)
+	}
+	return a.send(ctx, userID, "Use the Submit or Record a new one button under your last recording.", nil)
+}
+
+func (a *app) handleCallback(ctx context.Context, userID int64, data string) error {
+	parts := strings.Split(data, ":")
+	if len(parts) == 0 {
+		return nil
+	}
+	s, err := a.getSession(ctx, userID)
+	if err != nil {
+		return err
+	}
+	switch parts[0] {
+	case "accept", "retry":
+		if len(parts) != 2 || s.Nonce == "" || parts[1] != s.Nonce || s.Candidate == nil || !(strings.HasPrefix(s.Stage, "confirm:") || strings.HasPrefix(s.Stage, "editconfirm:")) {
+			return a.send(ctx, userID, "That recording choice has expired. Follow the latest prompt.", nil)
+		}
+		kind := strings.TrimPrefix(strings.TrimPrefix(s.Stage, "editconfirm:"), "confirm:")
+		editing := strings.HasPrefix(s.Stage, "editconfirm:")
+		if parts[0] == "retry" {
+			s.Candidate, s.Nonce = nil, ""
+			if editing {
+				s.Stage = "editvoice:" + kind
+			} else {
+				s.Stage = "voice:" + kind
+			}
+			if err := a.putSession(ctx, userID, s); err != nil {
+				return err
+			}
+			return a.send(ctx, userID, "Send a new "+kind+" voice note. Aim for 5 seconds.", nil)
+		}
+		key, actualSize, err := a.storeVoice(ctx, userID, s.PairID, kind, s.Candidate)
+		if err != nil {
+			return err
+		}
+		s.Candidate.FileSize = actualSize
+		if s.Candidate.MimeType == "" {
+			s.Candidate.MimeType = "audio/ogg"
+		}
+		if err := a.saveVoice(ctx, userID, s.PairID, kind, key, s.Candidate); err != nil {
+			_ = a.s3.RemoveObject(ctx, a.cfg.bucket, key, minio.RemoveObjectOptions{})
+			return err
+		}
+		s.Candidate, s.Nonce = nil, ""
+		if editing {
+			if err := a.clearSession(ctx, userID); err != nil {
+				return err
+			}
+			if err := a.processDeletions(ctx); err != nil {
+				log.Printf("old audio cleanup: %v", err)
+			}
+			if err := a.send(ctx, userID, "Recording replaced. Please keep both recordings in the pair on the same sentence. Edit its transcript if the wording changed.", nil); err != nil {
+				return err
+			}
+			return a.showPair(ctx, userID, s.PairID)
+		}
+		s.Stage = "text:" + kind
+		if err := a.putSession(ctx, userID, s); err != nil {
+			return err
+		}
+		return a.send(ctx, userID, "Type exactly what you said in that "+kind+" recording.", nil)
+	case "pair":
+		if len(parts) == 2 {
+			return a.showPair(ctx, userID, parts[1])
+		}
+	case "page":
+		if len(parts) == 2 {
+			n, err := strconv.Atoi(parts[1])
+			if err == nil && n >= 0 {
+				return a.listPairs(ctx, userID, n)
+			}
+		}
+	case "editvoice", "edittext":
+		if len(parts) != 3 || (parts[2] != "sleepy" && parts[2] != "awake") {
+			break
+		}
+		if _, err := a.getPair(ctx, userID, parts[1]); err != nil {
+			return a.send(ctx, userID, "Pair not found.", nil)
+		}
+		if s.Stage != "" && !strings.HasPrefix(s.Stage, "edit") {
+			return a.send(ctx, userID, "Finish or /cancel your current pair first.", nil)
+		}
+		if parts[0] == "editvoice" {
+			s.Stage = "editvoice:" + parts[2]
+		} else {
+			s.Stage = "edittext:" + parts[2]
+		}
+		s.PairID, s.Candidate, s.Nonce = parts[1], nil, ""
+		if err := a.putSession(ctx, userID, s); err != nil {
+			return err
+		}
+		if parts[0] == "editvoice" {
+			return a.send(ctx, userID, "Send a replacement "+parts[2]+" Telegram voice note. Aim for 5 seconds; 10 seconds maximum.", nil)
+		}
+		return a.send(ctx, userID, "Type the corrected transcript for the "+parts[2]+" recording.", nil)
+	case "play":
+		if len(parts) != 3 || (parts[2] != "sleepy" && parts[2] != "awake") {
+			break
+		}
+		p, err := a.getPair(ctx, userID, parts[1])
+		if err != nil {
+			return a.send(ctx, userID, "Pair not found.", nil)
+		}
+		fileID := p.Sleepy.FileID
+		if parts[2] == "awake" {
+			fileID = p.Awake.FileID
+		}
+		if fileID == "" {
+			return a.send(ctx, userID, "Recording unavailable.", nil)
+		}
+		return a.call(ctx, "sendVoice", map[string]any{"chat_id": userID, "voice": fileID}, nil)
+	case "delete", "deleteyes":
+		if len(parts) != 2 {
+			break
+		}
+		if _, err := a.getPair(ctx, userID, parts[1]); err != nil {
+			return a.send(ctx, userID, "Pair not found.", nil)
+		}
+		if parts[0] == "delete" {
+			return a.send(ctx, userID, "Permanently delete this pair and both audio files?", [][]map[string]string{{button("Delete permanently", "deleteyes:"+parts[1]), button("Keep it", "pair:"+parts[1])}})
+		}
+		if err := a.markDeleting(ctx, userID, parts[1]); err != nil {
+			return err
+		}
+		if s.PairID == parts[1] {
+			_ = a.clearSession(ctx, userID)
+		}
+		if err := a.processDeletions(ctx); err != nil {
+			log.Printf("deletion pending: %v", err)
+		}
+		return a.send(ctx, userID, "Pair deleted. If storage was temporarily unavailable, cleanup will retry when the bot restarts.", nil)
+	}
+	return a.send(ctx, userID, "That button is no longer valid. Use /my to see your pairs.", nil)
+}
+
+func (a *app) startPair(ctx context.Context, userID int64) error {
+	s, err := a.getSession(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if s.Stage != "" && !strings.HasPrefix(s.Stage, "edit") && s.PairID != "" {
+		if err := a.markDeleting(ctx, userID, s.PairID); err != nil {
+			return err
+		}
+		if err := a.processDeletions(ctx); err != nil {
+			log.Printf("abandoned draft cleanup: %v", err)
+		}
+	}
+	id := randomID()
+	if _, err := a.db.Exec(ctx, `INSERT INTO pairs(id,user_id,status) VALUES($1,$2,'draft')`, id, userID); err != nil {
+		return err
+	}
+	if err := a.putSession(ctx, userID, session{Stage: "voice:sleepy", PairID: id}); err != nil {
+		return err
+	}
+	return a.send(ctx, userID, "First, send a sleepy voice note. Say a sentence of your choice, aim for 5 seconds, and keep it under 10 seconds. You will say the same sentence in the awake note.", nil)
+}
+
+func (a *app) cancel(ctx context.Context, userID int64) error {
+	s, err := a.getSession(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if s.Stage == "" {
+		return a.send(ctx, userID, "Nothing to cancel.", nil)
+	}
+	if !strings.HasPrefix(s.Stage, "edit") && s.PairID != "" {
+		if err := a.markDeleting(ctx, userID, s.PairID); err != nil {
+			return err
+		}
+		if err := a.processDeletions(ctx); err != nil {
+			log.Printf("draft cleanup: %v", err)
+		}
+	}
+	if err := a.clearSession(ctx, userID); err != nil {
+		return err
+	}
+	return a.send(ctx, userID, "Stopped. Use /new whenever you want to start a new pair.", nil)
+}
+
+func (a *app) listPairs(ctx context.Context, userID int64, page int) error {
+	if page > 100000 {
+		return a.send(ctx, userID, "Page out of range.", nil)
+	}
+	rows, err := a.db.Query(ctx, `SELECT id,created_at FROM pairs WHERE user_id=$1 AND status='complete' ORDER BY created_at DESC,id DESC LIMIT 11 OFFSET $2`, userID, page*10)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	buttons := [][]map[string]string{}
+	n := 0
+	for rows.Next() {
+		var id string
+		var created time.Time
+		if err := rows.Scan(&id, &created); err != nil {
+			return err
+		}
+		if n < 10 {
+			buttons = append(buttons, []map[string]string{button(created.UTC().Format("2006-01-02 15:04 UTC")+" · "+id[:8], "pair:"+id)})
+		}
+		n++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	nav := []map[string]string{}
+	if page > 0 {
+		nav = append(nav, button("Previous", "page:"+strconv.Itoa(page-1)))
+	}
+	if n > 10 {
+		nav = append(nav, button("Next", "page:"+strconv.Itoa(page+1)))
+	}
+	if len(nav) > 0 {
+		buttons = append(buttons, nav)
+	}
+	if len(buttons) == 0 {
+		return a.send(ctx, userID, "No submitted pairs yet. Use /new to start.", nil)
+	}
+	return a.send(ctx, userID, "Your submitted pairs:", buttons)
+}
+
+func (a *app) showPair(ctx context.Context, userID int64, id string) error {
+	p, err := a.getPair(ctx, userID, id)
+	if err != nil {
+		return a.send(ctx, userID, "Pair not found.", nil)
+	}
+	text := fmt.Sprintf("Pair %s · %s\nSleepy (%ds): %s\nAwake (%ds): %s\n\nBoth recordings should say the same sentence.", p.ID[:8], p.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"), p.Sleepy.Duration, p.Sleepy.Transcript, p.Awake.Duration, p.Awake.Transcript)
+	return a.send(ctx, userID, text, [][]map[string]string{
+		{button("Play sleepy", "play:"+id+":sleepy"), button("Play awake", "play:"+id+":awake")},
+		{button("Replace sleepy voice", "editvoice:"+id+":sleepy"), button("Edit sleepy text", "edittext:"+id+":sleepy")},
+		{button("Replace awake voice", "editvoice:"+id+":awake"), button("Edit awake text", "edittext:"+id+":awake")},
+		{button("Delete pair", "delete:"+id)},
+	})
+}
