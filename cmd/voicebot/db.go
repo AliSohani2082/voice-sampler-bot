@@ -219,13 +219,13 @@ func (a *app) saveVoice(ctx context.Context, userID int64, pairID, kind, key str
 	return tx.Commit(ctx)
 }
 
-func (a *app) saveTranscript(ctx context.Context, userID int64, pairID, kind, transcript string) error {
-	cmd, err := a.db.Exec(ctx, `UPDATE samples s SET transcript=$1 FROM pairs p WHERE s.pair_id=p.id AND p.id=$2 AND p.user_id=$3 AND p.status IN ('draft','complete') AND s.kind=$4`, transcript, pairID, userID, kind)
+func (a *app) saveTranscript(ctx context.Context, userID int64, pairID, transcript string) error {
+	cmd, err := a.db.Exec(ctx, `UPDATE samples s SET transcript=$1 FROM pairs p WHERE s.pair_id=p.id AND p.id=$2 AND p.user_id=$3 AND p.status IN ('draft','complete')`, transcript, pairID, userID)
 	if err != nil {
 		return err
 	}
-	if cmd.RowsAffected() != 1 {
-		return errors.New("sample unavailable")
+	if cmd.RowsAffected() != 2 {
+		return errors.New("pair samples unavailable")
 	}
 	return nil
 }
