@@ -23,7 +23,7 @@ The first build needs internet access to download Go modules and container image
 
 ## Admin commands
 
-The `ADMIN_TELEGRAM_ID` user can use `/stats` for user, pair, recording, and storage totals; `/users` to browse users and open their submitted pairs; `/allow 123456789` and `/unallow 123456789` to change access; and `/broadcast your message` to send text to every currently allowlisted user who has chatted with the bot. A user's record view also has an allowlist button. The admin can read transcripts and play recordings, but the admin view has no edit or delete controls. Broadcasts exclude the admin and report failed deliveries. Users who have never opened a private chat with the bot cannot receive a broadcast.
+The `ADMIN_TELEGRAM_ID` user can use `/stats` for user, pair, recording, and storage totals; `/users` to browse users and open their submitted pairs; `/allow 123456789` and `/unallow 123456789` to change access; and `/broadcast` to be prompted for a message in the next chat message. Use `/cancel` to cancel the prompt. Adding an ID also puts it in `/users` and broadcast attempts, but the recipient must send `/start` before the bot can deliver messages. A user's record view also has an allowlist button. The admin can read transcripts and play recordings, but the admin view has no edit or delete controls. Broadcasts exclude the admin and report failed deliveries.
 
 The bot stores the participant's Telegram numeric ID, Telegram file ID and unique file ID, reported duration, downloaded byte count, MIME type, transcript, timestamps, and bucket object key. The recordings remain private in MinIO. A startup and periodic cleanup job retries failed object deletions.
 

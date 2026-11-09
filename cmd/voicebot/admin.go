@@ -187,12 +187,25 @@ func (a *app) setAllowed(ctx context.Context, rawID string, allowed bool) error 
 	if id == a.cfg.adminID {
 		return a.send(ctx, a.cfg.adminID, "The admin is always allowed.", nil)
 	}
-	if _, err := a.db.Exec(ctx, `INSERT INTO allowlist(user_id,allowed) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET allowed=$2`, id, allowed); err != nil {
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `INSERT INTO allowlist(user_id,allowed) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET allowed=$2`, id, allowed); err != nil {
+		return err
+	}
+	if allowed {
+		if _, err := tx.Exec(ctx, `INSERT INTO users(user_id) VALUES($1) ON CONFLICT DO NOTHING`, id); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
 	if allowed {
 		a.cfg.allowed[id] = true
-		return a.send(ctx, a.cfg.adminID, fmt.Sprintf("User %d added to the allowlist. They can now open a private chat with the bot.", id), nil)
+		return a.send(ctx, a.cfg.adminID, fmt.Sprintf("User %d added to the allowlist and /users. They must send /start to the bot before it can deliver messages to them.", id), nil)
 	}
 	delete(a.cfg.allowed, id)
 	return a.send(ctx, a.cfg.adminID, fmt.Sprintf("User %d removed from the allowlist.", id), nil)
@@ -235,5 +248,5 @@ func (a *app) broadcast(ctx context.Context, message string) error {
 			sent++
 		}
 	}
-	return a.send(ctx, a.cfg.adminID, fmt.Sprintf("Broadcast finished: %d sent, %d failed.", sent, failed), nil)
+	return a.send(ctx, a.cfg.adminID, fmt.Sprintf("Broadcast finished: %d sent, %d failed. Users who have not opened a private chat cannot receive messages yet.", sent, failed), nil)
 }

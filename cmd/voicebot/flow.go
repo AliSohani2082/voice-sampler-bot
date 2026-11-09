@@ -19,6 +19,22 @@ func actionButtons() [][]map[string]string {
 
 func (a *app) handleMessage(ctx context.Context, m *message) error {
 	userID := m.From.ID
+	if a.cfg.adminID != 0 && userID == a.cfg.adminID && a.broadcastPending {
+		if strings.HasPrefix(m.Text, "/") {
+			if strings.SplitN(strings.Fields(m.Text)[0], "@", 2)[0] == "/cancel" {
+				a.broadcastPending = false
+				return a.send(ctx, userID, "Broadcast canceled.", nil)
+			}
+		}
+		if strings.TrimSpace(m.Text) == "" {
+			return a.send(ctx, userID, "Please send the text to broadcast, or use /cancel.", nil)
+		} else if len([]rune(m.Text)) > 4096 {
+			return a.send(ctx, userID, "That message is too long. Send up to 4096 characters, or use /cancel.", nil)
+		} else {
+			a.broadcastPending = false
+			return a.broadcast(ctx, m.Text)
+		}
+	}
 	if strings.HasPrefix(m.Text, "/") {
 		command := strings.SplitN(strings.Fields(m.Text)[0], "@", 2)[0]
 		if a.cfg.adminID != 0 && userID == a.cfg.adminID {
@@ -28,7 +44,11 @@ func (a *app) handleMessage(ctx context.Context, m *message) error {
 			case "/users":
 				return a.adminUsers(ctx, 0)
 			case "/broadcast":
-				return a.broadcast(ctx, strings.TrimSpace(strings.TrimPrefix(m.Text, strings.Fields(m.Text)[0])))
+				if err := a.send(ctx, userID, "Send the text to broadcast in your next message. Use /cancel to cancel.", nil); err != nil {
+					return err
+				}
+				a.broadcastPending = true
+				return nil
 			case "/allow", "/unallow":
 				return a.setAllowed(ctx, strings.TrimSpace(strings.TrimPrefix(m.Text, strings.Fields(m.Text)[0])), command == "/allow")
 			}

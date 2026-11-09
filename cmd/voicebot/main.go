@@ -27,11 +27,12 @@ type config struct {
 }
 
 type app struct {
-	cfg    config
-	db     *pgxpool.Pool
-	s3     *minio.Client
-	http   *http.Client
-	apiURL string
+	cfg              config
+	db               *pgxpool.Pool
+	s3               *minio.Client
+	http             *http.Client
+	apiURL           string
+	broadcastPending bool
 }
 
 func main() {
