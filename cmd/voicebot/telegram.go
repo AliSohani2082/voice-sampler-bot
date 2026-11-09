@@ -153,7 +153,7 @@ func (a *app) poll(ctx context.Context) {
 				if u.Callback != nil {
 					userID = u.Callback.From.ID
 				}
-				if a.cfg.allowed[userID] {
+				if !a.cfg.allowlistEnabled || a.cfg.allowed[userID] {
 					_ = a.send(ctx, userID, "I couldn't finish that action. Please try again or use /start for help.", nil)
 				}
 			}
@@ -172,7 +172,7 @@ func (a *app) handle(ctx context.Context, u update) error {
 		if q.Message == nil || q.Message.Chat.Type != "private" || q.Message.Chat.ID != q.From.ID {
 			return nil
 		}
-		if !a.cfg.allowed[q.From.ID] {
+		if a.cfg.allowlistEnabled && !a.cfg.allowed[q.From.ID] {
 			return a.send(ctx, q.From.ID, "You are not on the allowlist.", nil)
 		}
 		language, err := a.getLanguage(ctx, q.From.ID)
@@ -189,7 +189,7 @@ func (a *app) handle(ctx context.Context, u update) error {
 	if m.Chat.Type != "private" || m.Chat.ID != m.From.ID {
 		return nil
 	}
-	if !a.cfg.allowed[m.From.ID] {
+	if a.cfg.allowlistEnabled && !a.cfg.allowed[m.From.ID] {
 		return a.send(ctx, m.Chat.ID, "You are not on the allowlist.", nil)
 	}
 	language, err := a.getLanguage(ctx, m.From.ID)

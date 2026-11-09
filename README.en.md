@@ -5,7 +5,7 @@ A private Telegram bot for collecting paired sleepy and awake voice notes. The b
 ## Start
 
 1. Create a bot with Telegram's BotFather and copy its token.
-2. Copy `.env.example` to `.env`. Set `TELEGRAM_BOT_TOKEN`, comma-separated numeric `ALLOWED_USER_IDS`, and two long, different passwords. Keep `.env` private.
+2. Copy `.env.example` to `.env`. Set `TELEGRAM_BOT_TOKEN`, comma-separated numeric `ALLOWED_USER_IDS`, and two long, different passwords. Keep `.env` private. Set `ALLOWLIST_ENABLED=false` to let any Telegram user create records; it defaults to `true`.
 3. Run `docker compose up --build -d`.
 4. Run `docker compose logs -f bot` to confirm the bot started, then open a private chat with it and send `/start`.
 

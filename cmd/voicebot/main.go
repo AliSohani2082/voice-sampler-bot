@@ -23,6 +23,7 @@ import (
 type config struct {
 	token, bucket string
 	allowed       map[int64]bool
+	allowlistEnabled bool
 }
 
 type app struct {
@@ -79,7 +80,7 @@ func main() {
 }
 
 func loadConfig() (config, error) {
-	c := config{token: os.Getenv("TELEGRAM_BOT_TOKEN"), bucket: os.Getenv("S3_BUCKET"), allowed: map[int64]bool{}}
+	c := config{token: os.Getenv("TELEGRAM_BOT_TOKEN"), bucket: os.Getenv("S3_BUCKET"), allowed: map[int64]bool{}, allowlistEnabled: os.Getenv("ALLOWLIST_ENABLED") != "false"}
 	if c.token == "" || c.bucket == "" {
 		return c, errors.New("TELEGRAM_BOT_TOKEN and S3_BUCKET are required")
 	}
@@ -94,7 +95,7 @@ func loadConfig() (config, error) {
 		}
 		c.allowed[id] = true
 	}
-	if len(c.allowed) == 0 {
+	if c.allowlistEnabled && len(c.allowed) == 0 {
 		return c, errors.New("ALLOWED_USER_IDS must contain at least one Telegram numeric user ID")
 	}
 	return c, nil
