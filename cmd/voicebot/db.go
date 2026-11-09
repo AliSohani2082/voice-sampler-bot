@@ -86,6 +86,10 @@ CREATE TABLE IF NOT EXISTS sessions (
   candidate jsonb,
   nonce text NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS user_languages (
+  user_id bigint PRIMARY KEY,
+  language text NOT NULL CHECK (language IN ('en','fa'))
+);
 CREATE TABLE IF NOT EXISTS object_deletions (
   object_key text PRIMARY KEY,
   pair_id text,
@@ -95,6 +99,20 @@ CREATE TABLE IF NOT EXISTS bot_state (
   id integer PRIMARY KEY CHECK (id=1),
   offset_value bigint NOT NULL
 );`
+
+func (a *app) getLanguage(ctx context.Context, userID int64) (string, error) {
+	var language string
+	err := a.db.QueryRow(ctx, `SELECT language FROM user_languages WHERE user_id=$1`, userID).Scan(&language)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "en", nil
+	}
+	return language, err
+}
+
+func (a *app) setLanguage(ctx context.Context, userID int64, language string) error {
+	_, err := a.db.Exec(ctx, `INSERT INTO user_languages(user_id,language) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET language=$2`, userID, language)
+	return err
+}
 
 func (a *app) getSession(ctx context.Context, userID int64) (session, error) {
 	var s session

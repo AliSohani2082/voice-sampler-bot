@@ -86,8 +86,13 @@ func (a *app) call(ctx context.Context, method string, params any, out any) erro
 }
 
 func (a *app) send(ctx context.Context, chatID int64, text string, buttons [][]map[string]string) error {
-	p := map[string]any{"chat_id": chatID, "text": text}
+	p := map[string]any{"chat_id": chatID, "text": translate(ctx, text)}
 	if len(buttons) > 0 {
+		for _, row := range buttons {
+			for _, b := range row {
+				b["text"] = translate(ctx, b["text"])
+			}
+		}
 		p["reply_markup"] = map[string]any{"inline_keyboard": buttons}
 	}
 	return a.call(ctx, "sendMessage", p, nil)
@@ -156,6 +161,11 @@ func (a *app) handle(ctx context.Context, u update) error {
 		if !a.cfg.allowed[q.From.ID] {
 			return a.send(ctx, q.From.ID, "You are not on the allowlist.", nil)
 		}
+		language, err := a.getLanguage(ctx, q.From.ID)
+		if err != nil {
+			return err
+		}
+		ctx = withLanguage(ctx, language)
 		return a.handleCallback(ctx, q.From.ID, q.Data)
 	}
 	if u.Message == nil {
@@ -168,5 +178,10 @@ func (a *app) handle(ctx context.Context, u update) error {
 	if !a.cfg.allowed[m.From.ID] {
 		return a.send(ctx, m.Chat.ID, "You are not on the allowlist.", nil)
 	}
+	language, err := a.getLanguage(ctx, m.From.ID)
+	if err != nil {
+		return err
+	}
+	ctx = withLanguage(ctx, language)
 	return a.handleMessage(ctx, m)
 }

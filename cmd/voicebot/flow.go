@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 )
@@ -14,7 +16,9 @@ func (a *app) handleMessage(ctx context.Context, m *message) error {
 	if strings.HasPrefix(m.Text, "/") {
 		command := strings.SplitN(strings.Fields(m.Text)[0], "@", 2)[0]
 		switch command {
-		case "/start", "/help":
+		case "/start":
+			return a.send(ctx, userID, "Choose your language / زبان خود را انتخاب کنید:", [][]map[string]string{{button("English", "lang:en"), button("فارسی", "lang:fa")}})
+		case "/help":
 			return a.send(ctx, userID, "Send one sleepy and one awake Telegram voice note per pair. Aim for 5 seconds; clips over 10 seconds are rejected. Say the same sentence in both notes and type what you said for each. I store the audio and text until you delete the pair. Use /new to start, /my to view or edit your pairs, and /cancel to stop an unfinished pair.", nil)
 		case "/new":
 			return a.startPair(ctx, userID)
@@ -50,7 +54,7 @@ func (a *app) handleMessage(ctx context.Context, m *message) error {
 		if err := a.putSession(ctx, userID, s); err != nil {
 			return err
 		}
-		return a.send(ctx, userID, fmt.Sprintf("This voice note is %d seconds. Submit it or record a new one?", m.Voice.Duration), [][]map[string]string{{button("Submit", "accept:"+s.Nonce), button("Record a new one", "retry:"+s.Nonce)}})
+		return a.send(ctx, userID, fmt.Sprintf(translate(ctx, "This voice note is %d seconds. Submit it or record a new one?"), m.Voice.Duration), [][]map[string]string{{button("Submit", "accept:"+s.Nonce), button("Record a new one", "retry:"+s.Nonce)}})
 	}
 	if strings.HasPrefix(s.Stage, "text:") || strings.HasPrefix(s.Stage, "edittext:") {
 		transcript := strings.TrimSpace(m.Text)
@@ -98,6 +102,15 @@ func (a *app) handleCallback(ctx context.Context, userID int64, data string) err
 		return err
 	}
 	switch parts[0] {
+	case "lang":
+		if len(parts) != 2 || (parts[1] != "en" && parts[1] != "fa") {
+			break
+		}
+		if err := a.setLanguage(ctx, userID, parts[1]); err != nil {
+			return err
+		}
+		ctx = withLanguage(ctx, parts[1])
+		return a.send(ctx, userID, "Send one sleepy and one awake Telegram voice note per pair. Aim for 5 seconds; clips over 10 seconds are rejected. Say the same sentence in both notes and type what you said for each. I store the audio and text until you delete the pair. Use /new to start, /my to view or edit your pairs, and /cancel to stop an unfinished pair.", nil)
 	case "accept", "retry":
 		if len(parts) != 2 || s.Nonce == "" || parts[1] != s.Nonce || s.Candidate == nil || !(strings.HasPrefix(s.Stage, "confirm:") || strings.HasPrefix(s.Stage, "editconfirm:")) {
 			return a.send(ctx, userID, "That recording choice has expired. Follow the latest prompt.", nil)
@@ -114,7 +127,7 @@ func (a *app) handleCallback(ctx context.Context, userID int64, data string) err
 			if err := a.putSession(ctx, userID, s); err != nil {
 				return err
 			}
-			return a.send(ctx, userID, "Send a new "+kind+" voice note. Aim for 5 seconds.", nil)
+			return a.send(ctx, userID, fmt.Sprintf(translate(ctx, "Send a new %s voice note. Aim for 5 seconds."), translateKind(ctx, kind)), nil)
 		}
 		key, actualSize, err := a.storeVoice(ctx, userID, s.PairID, kind, s.Candidate)
 		if err != nil {
@@ -145,7 +158,7 @@ func (a *app) handleCallback(ctx context.Context, userID int64, data string) err
 		if err := a.putSession(ctx, userID, s); err != nil {
 			return err
 		}
-		return a.send(ctx, userID, "Type exactly what you said in that "+kind+" recording.", nil)
+		return a.send(ctx, userID, fmt.Sprintf(translate(ctx, "Type exactly what you said in that %s recording."), translateKind(ctx, kind)), nil)
 	case "pair":
 		if len(parts) == 2 {
 			return a.showPair(ctx, userID, parts[1])
@@ -177,9 +190,9 @@ func (a *app) handleCallback(ctx context.Context, userID int64, data string) err
 			return err
 		}
 		if parts[0] == "editvoice" {
-			return a.send(ctx, userID, "Send a replacement "+parts[2]+" Telegram voice note. Aim for 5 seconds; 10 seconds maximum.", nil)
+			return a.send(ctx, userID, fmt.Sprintf(translate(ctx, "Send a replacement %s Telegram voice note. Aim for 5 seconds; 10 seconds maximum."), translateKind(ctx, parts[2])), nil)
 		}
-		return a.send(ctx, userID, "Type the corrected transcript for the "+parts[2]+" recording.", nil)
+		return a.send(ctx, userID, fmt.Sprintf(translate(ctx, "Type the corrected transcript for the %s recording."), translateKind(ctx, parts[2])), nil)
 	case "play":
 		if len(parts) != 3 || (parts[2] != "sleepy" && parts[2] != "awake") {
 			break
@@ -311,7 +324,7 @@ func (a *app) showPair(ctx context.Context, userID int64, id string) error {
 	if err != nil {
 		return a.send(ctx, userID, "Pair not found.", nil)
 	}
-	text := fmt.Sprintf("Pair %s · %s\nSleepy (%ds): %s\nAwake (%ds): %s\n\nBoth recordings should say the same sentence.", p.ID[:8], p.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"), p.Sleepy.Duration, p.Sleepy.Transcript, p.Awake.Duration, p.Awake.Transcript)
+	text := fmt.Sprintf(translate(ctx, "Pair %s · %s\nSleepy (%ds): %s\nAwake (%ds): %s\n\nBoth recordings should say the same sentence."), p.ID[:8], p.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"), p.Sleepy.Duration, p.Sleepy.Transcript, p.Awake.Duration, p.Awake.Transcript)
 	return a.send(ctx, userID, text, [][]map[string]string{
 		{button("Play sleepy", "play:"+id+":sleepy"), button("Play awake", "play:"+id+":awake")},
 		{button("Replace sleepy voice", "editvoice:"+id+":sleepy"), button("Edit sleepy text", "edittext:"+id+":sleepy")},

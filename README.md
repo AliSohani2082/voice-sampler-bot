@@ -13,6 +13,7 @@ The first build needs internet access to download Go modules and container image
 
 ## Participant flow
 
+- `/start` offers English or فارسی. The choice is saved per participant and can be changed by sending `/start` again; it changes the bot's prompts and buttons, not the recordings or transcripts.
 - `/new` starts a new pair. The bot asks for a sleepy Telegram voice note, then offers **Submit** or **Record a new one**. It asks the participant to type what they said.
 - The bot repeats this for the awake voice and reminds them to say the same sentence. Each later pair may use another sentence.
 - Aim for five seconds. Telegram voice notes reporting more than ten seconds are rejected. The bot does not transcribe audio or compare the two typed sentences.
