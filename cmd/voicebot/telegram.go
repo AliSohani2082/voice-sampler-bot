@@ -102,6 +102,20 @@ func button(label, data string) map[string]string {
 	return map[string]string{"text": label, "callback_data": data}
 }
 
+func (a *app) registerMenu(ctx context.Context) error {
+	commands := []map[string]string{
+		{"command": "start", "description": "Choose language / انتخاب زبان"},
+		{"command": "new", "description": "Record a pair / ضبط جفت صدا"},
+		{"command": "my", "description": "View my pairs / دیدن جفت‌ها"},
+		{"command": "help", "description": "How it works / راهنما"},
+		{"command": "cancel", "description": "Cancel current pair / لغو جفت فعلی"},
+	}
+	if err := a.call(ctx, "setMyCommands", map[string]any{"commands": commands}, nil); err != nil {
+		return err
+	}
+	return a.call(ctx, "setChatMenuButton", map[string]any{"menu_button": map[string]string{"type": "commands"}}, nil)
+}
+
 func (a *app) poll(ctx context.Context) {
 	var offset int64
 	if err := a.db.QueryRow(ctx, `SELECT offset_value FROM bot_state WHERE id=1`).Scan(&offset); err != nil && !errors.Is(err, pgx.ErrNoRows) {
