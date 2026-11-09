@@ -11,7 +11,7 @@ import (
 	"github.com/minio/minio-go/v7"
 )
 
-const welcome = "Hi! 👋 This bot helps collect voice samples for Professor Zahedi's (زاهدی) Statistical Machine Learning class. Each student is asked to record 20 pairs: one sleepy and one awake voice note per pair, about 5 seconds each. At the end of the semester, these recordings will form a dataset for a machine learning project. Say the same sentence in both notes and type what you said after each. Notes over 10 seconds are rejected. Your audio and text stay stored until you delete a pair. Created by @ali2082. Choose an option below or open the Menu beside the message field."
+const welcome = "Hi! 👋 This bot helps collect voice samples for Professor Zahedi's (زاهدی) Statistical Machine Learning class. Each student is asked to record 20 pairs: one sleepy and one awake voice note per pair, about 5 seconds each. At the end of the semester, these recordings will form a dataset for a machine learning project. Say the same sentence in both notes and type what you said after each. Notes over 10 seconds are rejected. Your audio and text stay stored until you delete a pair. Created by @AliSohani2082. Choose an option below or open the Menu beside the message field."
 
 func actionButtons() [][]map[string]string {
 	return [][]map[string]string{{button("Record a pair", "action:new"), button("My pairs", "action:my")}, {button("Help", "action:help")}}
