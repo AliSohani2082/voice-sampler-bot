@@ -11,7 +11,7 @@ import (
 	"github.com/minio/minio-go/v7"
 )
 
-const welcome = "Hi! 👋 This bot helps collect voice samples for Professor Zahedi's (زاهدی) Statistical Machine Learning class. Each student is asked to record 20 pairs: one sleepy and one awake voice note per pair, about 5 seconds each. At the end of the semester, these recordings will form a dataset for a machine learning project. Say the same sentence in both notes and type what you said after each. Notes over 10 seconds are rejected. Your audio and text stay stored until you delete a pair. Created by @AliSohani2082. Choose an option below or open the Menu beside the message field."
+const welcome = "Hi! 👋 This bot helps collect voice samples for Professor Zahedi's (زاهدی) Statistical Machine Learning class. Each student is asked to record 20 pairs: one sleepy and one awake voice note per pair, about 5 seconds each. At the end of the semester, these recordings will form a dataset for a machine learning project. Say the same sentence in both notes and type it once for the pair. Notes over 10 seconds are rejected. Your audio and text stay stored until you delete a pair. Created by @AliSohani2082. Choose an option below or open the Menu beside the message field."
 
 func actionButtons() [][]map[string]string {
 	return [][]map[string]string{{button("Record a pair", "action:new"), button("My pairs", "action:my")}, {button("Help", "action:help")}}
@@ -79,8 +79,21 @@ func (a *app) handleMessage(ctx context.Context, m *message) error {
 		if transcript == "" || len([]rune(transcript)) > 1000 {
 			return a.send(ctx, userID, "Please type what you said (up to 1,000 characters).", nil)
 		}
-		kind := strings.TrimPrefix(strings.TrimPrefix(s.Stage, "edittext:"), "text:")
-		if err := a.saveTranscript(ctx, userID, s.PairID, kind, transcript); err != nil {
+		if s.Stage == "text:sleepy" { // Finish drafts started before the pair transcript flow changed.
+			cmd, err := a.db.Exec(ctx, `UPDATE samples s SET transcript=$1 FROM pairs p WHERE s.pair_id=p.id AND p.id=$2 AND p.user_id=$3 AND p.status='draft' AND s.kind='sleepy'`, transcript, s.PairID, userID)
+			if err != nil {
+				return err
+			}
+			if cmd.RowsAffected() != 1 {
+				return fmt.Errorf("sleepy sample unavailable")
+			}
+			s.Stage = "voice:awake"
+			if err := a.putSession(ctx, userID, s); err != nil {
+				return err
+			}
+			return a.send(ctx, userID, "Now record your awake voice. Say the same sentence as in the sleepy note. Aim for 5 seconds; 10 seconds maximum.", nil)
+		}
+		if err := a.saveTranscript(ctx, userID, s.PairID, transcript); err != nil {
 			return err
 		}
 		if strings.HasPrefix(s.Stage, "edittext:") {
@@ -91,13 +104,6 @@ func (a *app) handleMessage(ctx context.Context, m *message) error {
 				return err
 			}
 			return a.showPair(ctx, userID, s.PairID)
-		}
-		if kind == "sleepy" {
-			s.Stage = "voice:awake"
-			if err := a.putSession(ctx, userID, s); err != nil {
-				return err
-			}
-			return a.send(ctx, userID, "Now record your awake voice. Say the same sentence as in the sleepy note. Aim for 5 seconds; 10 seconds maximum.", nil)
 		}
 		if err := a.completePair(ctx, userID, s.PairID); err != nil {
 			return err
@@ -195,11 +201,18 @@ func (a *app) handleCallback(ctx context.Context, userID int64, data string) err
 			}
 			return a.showPair(ctx, userID, s.PairID)
 		}
-		s.Stage = "text:" + kind
+		if kind == "sleepy" {
+			s.Stage = "voice:awake"
+			if err := a.putSession(ctx, userID, s); err != nil {
+				return err
+			}
+			return a.send(ctx, userID, "Now record your awake voice. Say the same sentence as in the sleepy note. Aim for 5 seconds; 10 seconds maximum.", nil)
+		}
+		s.Stage = "text:pair"
 		if err := a.putSession(ctx, userID, s); err != nil {
 			return err
 		}
-		return a.send(ctx, userID, fmt.Sprintf(translate(ctx, "Type exactly what you said in that %s recording."), translateKind(ctx, kind)), nil)
+		return a.send(ctx, userID, "Type the sentence you said in both recordings.", nil)
 	case "pair":
 		if len(parts) == 2 {
 			return a.showPair(ctx, userID, parts[1])
@@ -212,7 +225,7 @@ func (a *app) handleCallback(ctx context.Context, userID int64, data string) err
 			}
 		}
 	case "editvoice", "edittext":
-		if len(parts) != 3 || (parts[2] != "sleepy" && parts[2] != "awake") {
+		if (parts[0] == "editvoice" && (len(parts) != 3 || (parts[2] != "sleepy" && parts[2] != "awake"))) || (parts[0] == "edittext" && len(parts) != 2 && (len(parts) != 3 || (parts[2] != "sleepy" && parts[2] != "awake"))) {
 			break
 		}
 		if _, err := a.getPair(ctx, userID, parts[1]); err != nil {
@@ -224,7 +237,7 @@ func (a *app) handleCallback(ctx context.Context, userID int64, data string) err
 		if parts[0] == "editvoice" {
 			s.Stage = "editvoice:" + parts[2]
 		} else {
-			s.Stage = "edittext:" + parts[2]
+			s.Stage = "edittext:pair"
 		}
 		s.PairID, s.Candidate, s.Nonce = parts[1], nil, ""
 		if err := a.putSession(ctx, userID, s); err != nil {
@@ -233,7 +246,7 @@ func (a *app) handleCallback(ctx context.Context, userID int64, data string) err
 		if parts[0] == "editvoice" {
 			return a.send(ctx, userID, fmt.Sprintf(translate(ctx, "Send a replacement %s Telegram voice note. Aim for 5 seconds; 10 seconds maximum."), translateKind(ctx, parts[2])), nil)
 		}
-		return a.send(ctx, userID, fmt.Sprintf(translate(ctx, "Type the corrected transcript for the %s recording."), translateKind(ctx, parts[2])), nil)
+		return a.send(ctx, userID, "Type the corrected sentence for both recordings.", nil)
 	case "play":
 		if len(parts) != 3 || (parts[2] != "sleepy" && parts[2] != "awake") {
 			break
@@ -368,11 +381,14 @@ func (a *app) showPair(ctx context.Context, userID int64, id string) error {
 	if err != nil {
 		return a.send(ctx, userID, "Pair not found.", nil)
 	}
-	text := fmt.Sprintf(translate(ctx, "Pair %s · %s\nSleepy (%ds): %s\nAwake (%ds): %s\n\nBoth recordings should say the same sentence."), p.ID[:8], p.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"), p.Sleepy.Duration, p.Sleepy.Transcript, p.Awake.Duration, p.Awake.Transcript)
+	text := fmt.Sprintf(translate(ctx, "Pair %s · %s\nSleepy: %ds · Awake: %ds\nTranscript: %s"), p.ID[:8], p.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"), p.Sleepy.Duration, p.Awake.Duration, p.Sleepy.Transcript)
+	if p.Sleepy.Transcript != p.Awake.Transcript {
+		text = fmt.Sprintf(translate(ctx, "Pair %s · %s\nSleepy (%ds): %s\nAwake (%ds): %s\n\nBoth recordings should say the same sentence."), p.ID[:8], p.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"), p.Sleepy.Duration, p.Sleepy.Transcript, p.Awake.Duration, p.Awake.Transcript)
+	}
 	return a.send(ctx, userID, text, [][]map[string]string{
 		{button("Play sleepy", "play:"+id+":sleepy"), button("Play awake", "play:"+id+":awake")},
-		{button("Replace sleepy voice", "editvoice:"+id+":sleepy"), button("Edit sleepy text", "edittext:"+id+":sleepy")},
-		{button("Replace awake voice", "editvoice:"+id+":awake"), button("Edit awake text", "edittext:"+id+":awake")},
+		{button("Replace sleepy voice", "editvoice:"+id+":sleepy"), button("Replace awake voice", "editvoice:"+id+":awake")},
+		{button("Edit pair transcript", "edittext:"+id)},
 		{button("Delete pair", "delete:"+id)},
 	})
 }
