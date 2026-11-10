@@ -9,26 +9,35 @@ import (
 	"time"
 )
 
-func (a *app) adminStats(ctx context.Context) error {
+// adminIDs lists every full admin so queries can exclude them (non-nil: a nil slice would encode as SQL NULL).
+func (a *app) adminIDs() []int64 {
+	ids := make([]int64, 0, len(a.cfg.fullAdmins))
+	for id := range a.cfg.fullAdmins {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func (a *app) adminStats(ctx context.Context, to int64) error {
 	var users, pairs, drafts, recordings int
 	var bytes int64
 	err := a.db.QueryRow(ctx, `SELECT
-		(SELECT count(*) FROM users WHERE user_id<>$1),
+		(SELECT count(*) FROM users WHERE user_id<>ALL($1)),
 		(SELECT count(*) FROM pairs WHERE status='complete'),
 		(SELECT count(*) FROM pairs WHERE status='draft'),
 		(SELECT count(*) FROM samples s JOIN pairs p ON p.id=s.pair_id WHERE p.status='complete'),
-		(SELECT coalesce(sum(s.file_size_bytes),0) FROM samples s JOIN pairs p ON p.id=s.pair_id WHERE p.status='complete')`, a.cfg.adminID).Scan(&users, &pairs, &drafts, &recordings, &bytes)
+		(SELECT coalesce(sum(s.file_size_bytes),0) FROM samples s JOIN pairs p ON p.id=s.pair_id WHERE p.status='complete')`, a.adminIDs()).Scan(&users, &pairs, &drafts, &recordings, &bytes)
 	if err != nil {
 		return err
 	}
-	return a.send(ctx, a.cfg.adminID, fmt.Sprintf("Users: %d\nCompleted pairs: %d\nUnfinished pairs: %d\nRecordings: %d\nStored audio: %.1f MiB", users, pairs, drafts, recordings, float64(bytes)/(1024*1024)), nil)
+	return a.send(ctx, to, fmt.Sprintf("Users: %d\nCompleted pairs: %d\nUnfinished pairs: %d\nRecordings: %d\nStored audio: %.1f MiB", users, pairs, drafts, recordings, float64(bytes)/(1024*1024)), nil)
 }
 
-func (a *app) adminUsers(ctx context.Context, page int) error {
+func (a *app) adminUsers(ctx context.Context, to int64, page int) error {
 	if page < 0 || page > 100000 {
-		return a.send(ctx, a.cfg.adminID, "Page out of range.", nil)
+		return a.send(ctx, to, "Page out of range.", nil)
 	}
-	rows, err := a.db.Query(ctx, `SELECT user_id FROM users WHERE user_id<>$1 ORDER BY user_id LIMIT 11 OFFSET $2`, a.cfg.adminID, page*10)
+	rows, err := a.db.Query(ctx, `SELECT user_id FROM users WHERE user_id<>ALL($1) ORDER BY user_id LIMIT 11 OFFSET $2`, a.adminIDs(), page*10)
 	if err != nil {
 		return err
 	}
@@ -59,21 +68,21 @@ func (a *app) adminUsers(ctx context.Context, page int) error {
 		buttons = append(buttons, nav)
 	}
 	if len(buttons) == 0 {
-		return a.send(ctx, a.cfg.adminID, "No users yet.", nil)
+		return a.send(ctx, to, "No users yet.", nil)
 	}
-	return a.send(ctx, a.cfg.adminID, "Users:", buttons)
+	return a.send(ctx, to, "Users:", buttons)
 }
 
-func (a *app) adminUserPairs(ctx context.Context, userID int64, page int) error {
+func (a *app) adminUserPairs(ctx context.Context, to, userID int64, page int) error {
 	if page < 0 || page > 100000 {
-		return a.send(ctx, a.cfg.adminID, "Page out of range.", nil)
+		return a.send(ctx, to, "Page out of range.", nil)
 	}
 	var exists bool
-	if err := a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE user_id=$1 AND user_id<>$2)`, userID, a.cfg.adminID).Scan(&exists); err != nil {
+	if err := a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE user_id=$1 AND user_id<>ALL($2))`, userID, a.adminIDs()).Scan(&exists); err != nil {
 		return err
 	}
 	if !exists {
-		return a.send(ctx, a.cfg.adminID, "User not found.", nil)
+		return a.send(ctx, to, "User not found.", nil)
 	}
 	rows, err := a.db.Query(ctx, `SELECT id,created_at FROM pairs WHERE user_id=$1 AND status='complete' ORDER BY created_at DESC,id DESC LIMIT 11 OFFSET $2`, userID, page*10)
 	if err != nil {
@@ -112,80 +121,80 @@ func (a *app) adminUserPairs(ctx context.Context, userID int64, page int) error 
 	}
 	buttons = append(buttons, []map[string]string{button(label, fmt.Sprintf("admin:%s:%d:0", action, userID))})
 	buttons = append(buttons, []map[string]string{button("Back to users", "admin:users:0")})
-	return a.send(ctx, a.cfg.adminID, fmt.Sprintf("User %d · submitted pairs", userID), buttons)
+	return a.send(ctx, to, fmt.Sprintf("User %d · submitted pairs", userID), buttons)
 }
 
-func (a *app) adminPair(ctx context.Context, userID int64, id string) error {
+func (a *app) adminPair(ctx context.Context, to, userID int64, id string) error {
 	p, err := a.getPair(ctx, userID, id)
 	if err != nil {
-		return a.send(ctx, a.cfg.adminID, "Pair not found.", nil)
+		return a.send(ctx, to, "Pair not found.", nil)
 	}
 	text := fmt.Sprintf("User %d · Pair %s · %s\nSleepy (%ds): %s\nAwake (%ds): %s", userID, p.ID[:8], p.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"), p.Sleepy.Duration, p.Sleepy.Transcript, p.Awake.Duration, p.Awake.Transcript)
-	return a.send(ctx, a.cfg.adminID, text, [][]map[string]string{
+	return a.send(ctx, to, text, [][]map[string]string{
 		{button("Play sleepy", fmt.Sprintf("admin:play:%d:%s:sleepy", userID, id)), button("Play awake", fmt.Sprintf("admin:play:%d:%s:awake", userID, id))},
 		{button("Back to user", fmt.Sprintf("admin:user:%d:0", userID))},
 	})
 }
 
-func (a *app) handleAdminCallback(ctx context.Context, data string) error {
+func (a *app) handleAdminCallback(ctx context.Context, to int64, data string) error {
 	parts := strings.Split(data, ":")
 	if len(parts) == 3 && parts[1] == "users" {
 		page, err := strconv.Atoi(parts[2])
 		if err == nil {
-			return a.adminUsers(ctx, page)
+			return a.adminUsers(ctx, to, page)
 		}
 	}
 	if len(parts) >= 4 {
 		userID, err := strconv.ParseInt(parts[2], 10, 64)
-		if err != nil || userID <= 0 || userID == a.cfg.adminID {
-			return a.send(ctx, a.cfg.adminID, "Invalid user.", nil)
+		if err != nil || userID <= 0 || a.cfg.fullAdmins[userID] {
+			return a.send(ctx, to, "Invalid user.", nil)
 		}
 		switch parts[1] {
 		case "allow", "unallow":
 			if len(parts) == 4 {
-				if err := a.setAllowed(ctx, parts[2], parts[1] == "allow"); err != nil {
+				if err := a.setAllowed(ctx, to, parts[2], parts[1] == "allow"); err != nil {
 					return err
 				}
-				return a.adminUserPairs(ctx, userID, 0)
+				return a.adminUserPairs(ctx, to, userID, 0)
 			}
 		case "user":
 			if len(parts) == 4 {
 				page, err := strconv.Atoi(parts[3])
 				if err == nil {
-					return a.adminUserPairs(ctx, userID, page)
+					return a.adminUserPairs(ctx, to, userID, page)
 				}
 			}
 		case "pair":
 			if len(parts) == 4 {
-				return a.adminPair(ctx, userID, parts[3])
+				return a.adminPair(ctx, to, userID, parts[3])
 			}
 		case "play":
 			if len(parts) == 5 && (parts[4] == "sleepy" || parts[4] == "awake") {
 				p, err := a.getPair(ctx, userID, parts[3])
 				if err != nil {
-					return a.send(ctx, a.cfg.adminID, "Pair not found.", nil)
+					return a.send(ctx, to, "Pair not found.", nil)
 				}
 				fileID := p.Sleepy.FileID
 				if parts[4] == "awake" {
 					fileID = p.Awake.FileID
 				}
 				if fileID == "" {
-					return a.send(ctx, a.cfg.adminID, "Recording unavailable.", nil)
+					return a.send(ctx, to, "Recording unavailable.", nil)
 				}
-				return a.call(ctx, "sendVoice", map[string]any{"chat_id": a.cfg.adminID, "voice": fileID}, nil)
+				return a.call(ctx, "sendVoice", map[string]any{"chat_id": to, "voice": fileID}, nil)
 			}
 		}
 	}
-	return a.send(ctx, a.cfg.adminID, "That button is no longer valid. Use /users.", nil)
+	return a.send(ctx, to, "That button is no longer valid. Use /users.", nil)
 }
 
-func (a *app) setAllowed(ctx context.Context, rawID string, allowed bool) error {
+func (a *app) setAllowed(ctx context.Context, to int64, rawID string, allowed bool) error {
 	id, err := strconv.ParseInt(rawID, 10, 64)
 	if err != nil || id <= 0 {
-		return a.send(ctx, a.cfg.adminID, "Use /allow ID or /unallow ID with a positive numeric Telegram user ID.", nil)
+		return a.send(ctx, to, "Use /allow ID or /unallow ID with a positive numeric Telegram user ID.", nil)
 	}
-	if id == a.cfg.adminID {
-		return a.send(ctx, a.cfg.adminID, "The admin is always allowed.", nil)
+	if a.cfg.fullAdmins[id] {
+		return a.send(ctx, to, "The admin is always allowed.", nil)
 	}
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
@@ -205,17 +214,17 @@ func (a *app) setAllowed(ctx context.Context, rawID string, allowed bool) error 
 	}
 	if allowed {
 		a.cfg.allowed[id] = true
-		return a.send(ctx, a.cfg.adminID, fmt.Sprintf("User %d added to the allowlist and /users. They must send /start to the bot before it can deliver messages to them.", id), nil)
+		return a.send(ctx, to, fmt.Sprintf("User %d added to the allowlist and /users. They must send /start to the bot before it can deliver messages to them.", id), nil)
 	}
 	delete(a.cfg.allowed, id)
-	return a.send(ctx, a.cfg.adminID, fmt.Sprintf("User %d removed from the allowlist.", id), nil)
+	return a.send(ctx, to, fmt.Sprintf("User %d removed from the allowlist.", id), nil)
 }
 
-func (a *app) broadcast(ctx context.Context, message string) error {
+func (a *app) broadcast(ctx context.Context, to int64, message string) error {
 	if message == "" || len([]rune(message)) > 4096 {
-		return a.send(ctx, a.cfg.adminID, "Use /broadcast followed by a message of up to 4096 characters.", nil)
+		return a.send(ctx, to, "Use /broadcast followed by a message of up to 4096 characters.", nil)
 	}
-	rows, err := a.db.Query(ctx, `SELECT user_id FROM users WHERE user_id<>$1 ORDER BY user_id`, a.cfg.adminID)
+	rows, err := a.db.Query(ctx, `SELECT user_id FROM users WHERE user_id<>ALL($1) ORDER BY user_id`, a.adminIDs())
 	if err != nil {
 		return err
 	}
@@ -248,5 +257,5 @@ func (a *app) broadcast(ctx context.Context, message string) error {
 			sent++
 		}
 	}
-	return a.send(ctx, a.cfg.adminID, fmt.Sprintf("Broadcast finished: %d sent, %d failed. Users who have not opened a private chat cannot receive messages yet.", sent, failed), nil)
+	return a.send(ctx, to, fmt.Sprintf("Broadcast finished: %d sent, %d failed. Users who have not opened a private chat cannot receive messages yet.", sent, failed), nil)
 }

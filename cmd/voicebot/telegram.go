@@ -118,14 +118,14 @@ func (a *app) registerMenu(ctx context.Context) error {
 	if err := a.call(ctx, "setMyCommands", map[string]any{"commands": commands}, nil); err != nil {
 		return err
 	}
-	if a.cfg.adminID != 0 {
-		adminCommands := append(append([]map[string]string{}, commands...),
-			map[string]string{"command": "stats", "description": "App and user statistics"},
-			map[string]string{"command": "users", "description": "Browse users and their records"},
-			map[string]string{"command": "broadcast", "description": "Message all users: /broadcast text"},
-			map[string]string{"command": "allow", "description": "Allow a user: /allow ID"},
-			map[string]string{"command": "unallow", "description": "Remove a user: /unallow ID"})
-		if err := a.call(ctx, "setMyCommands", map[string]any{"commands": adminCommands, "scope": map[string]any{"type": "chat", "chat_id": a.cfg.adminID}}, nil); err != nil {
+	adminCommands := append(append([]map[string]string{}, commands...),
+		map[string]string{"command": "stats", "description": "App and user statistics"},
+		map[string]string{"command": "users", "description": "Browse users and their records"},
+		map[string]string{"command": "broadcast", "description": "Message all users: /broadcast text"},
+		map[string]string{"command": "allow", "description": "Allow a user: /allow ID"},
+		map[string]string{"command": "unallow", "description": "Remove a user: /unallow ID"})
+	for id := range a.cfg.fullAdmins {
+		if err := a.call(ctx, "setMyCommands", map[string]any{"commands": adminCommands, "scope": map[string]any{"type": "chat", "chat_id": id}}, nil); err != nil {
 			return err
 		}
 	}
