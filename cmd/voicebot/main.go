@@ -24,6 +24,7 @@ type config struct {
 	token, bucket string
 	allowed       map[int64]bool
 	adminID       int64
+	admins        map[int64]bool // may approve access requests; defaults to allowed
 }
 
 type app struct {
@@ -84,20 +85,13 @@ func main() {
 }
 
 func loadConfig() (config, error) {
-	c := config{token: os.Getenv("TELEGRAM_BOT_TOKEN"), bucket: os.Getenv("S3_BUCKET"), allowed: map[int64]bool{}}
+	c := config{token: os.Getenv("TELEGRAM_BOT_TOKEN"), bucket: os.Getenv("S3_BUCKET")}
 	if c.token == "" || c.bucket == "" {
 		return c, errors.New("TELEGRAM_BOT_TOKEN and S3_BUCKET are required")
 	}
-	for _, raw := range strings.Split(os.Getenv("ALLOWED_USER_IDS"), ",") {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
-		id, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || id <= 0 {
-			return c, fmt.Errorf("invalid ALLOWED_USER_IDS entry %q", raw)
-		}
-		c.allowed[id] = true
+	var err error
+	if c.allowed, err = parseIDs("ALLOWED_USER_IDS"); err != nil {
+		return c, err
 	}
 	if raw := strings.TrimSpace(os.Getenv("ADMIN_TELEGRAM_ID")); raw != "" {
 		id, err := strconv.ParseInt(raw, 10, 64)
@@ -110,7 +104,29 @@ func loadConfig() (config, error) {
 	if len(c.allowed) == 0 {
 		return c, errors.New("ALLOWED_USER_IDS or ADMIN_TELEGRAM_ID must contain a Telegram numeric user ID")
 	}
+	if c.admins, err = parseIDs("ADMIN_USER_IDS"); err != nil {
+		return c, err
+	}
+	if len(c.admins) == 0 {
+		c.admins = c.allowed
+	}
 	return c, nil
+}
+
+func parseIDs(env string) (map[int64]bool, error) {
+	ids := map[int64]bool{}
+	for _, raw := range strings.Split(os.Getenv(env), ",") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || id <= 0 {
+			return nil, fmt.Errorf("invalid %s entry %q", env, raw)
+		}
+		ids[id] = true
+	}
+	return ids, nil
 }
 
 func retry(ctx context.Context, fn func() error) error {

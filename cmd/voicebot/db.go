@@ -103,6 +103,13 @@ CREATE TABLE IF NOT EXISTS object_deletions (
   pair_id text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS access_requests (
+  user_id bigint PRIMARY KEY,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','denied')),
+  details text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  decided_at timestamptz
+);
 CREATE TABLE IF NOT EXISTS bot_state (
   id integer PRIMARY KEY CHECK (id=1),
   offset_value bigint NOT NULL
