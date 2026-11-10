@@ -90,6 +90,14 @@ CREATE TABLE IF NOT EXISTS user_languages (
   user_id bigint PRIMARY KEY,
   language text NOT NULL CHECK (language IN ('en','fa'))
 );
+CREATE TABLE IF NOT EXISTS users (
+  user_id bigint PRIMARY KEY
+);
+INSERT INTO users(user_id) SELECT user_id FROM pairs UNION SELECT user_id FROM sessions UNION SELECT user_id FROM user_languages ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS allowlist (
+  user_id bigint PRIMARY KEY,
+  allowed boolean NOT NULL
+);
 CREATE TABLE IF NOT EXISTS object_deletions (
   object_key text PRIMARY KEY,
   pair_id text,
@@ -106,6 +114,37 @@ CREATE TABLE IF NOT EXISTS bot_state (
   id integer PRIMARY KEY CHECK (id=1),
   offset_value bigint NOT NULL
 );`
+
+func (a *app) loadAllowlist(ctx context.Context) error {
+	for id := range a.cfg.allowed {
+		if id == a.cfg.adminID {
+			continue
+		}
+		if _, err := a.db.Exec(ctx, `INSERT INTO allowlist(user_id,allowed) VALUES($1,true) ON CONFLICT DO NOTHING`, id); err != nil {
+			return err
+		}
+	}
+	rows, err := a.db.Query(ctx, `SELECT user_id FROM allowlist WHERE allowed`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	a.cfg.allowed = map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		a.cfg.allowed[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if a.cfg.adminID != 0 {
+		a.cfg.allowed[a.cfg.adminID] = true
+	}
+	return nil
+}
 
 func (a *app) getLanguage(ctx context.Context, userID int64) (string, error) {
 	var language string
@@ -187,13 +226,13 @@ func (a *app) saveVoice(ctx context.Context, userID int64, pairID, kind, key str
 	return tx.Commit(ctx)
 }
 
-func (a *app) saveTranscript(ctx context.Context, userID int64, pairID, kind, transcript string) error {
-	cmd, err := a.db.Exec(ctx, `UPDATE samples s SET transcript=$1 FROM pairs p WHERE s.pair_id=p.id AND p.id=$2 AND p.user_id=$3 AND p.status IN ('draft','complete') AND s.kind=$4`, transcript, pairID, userID, kind)
+func (a *app) saveTranscript(ctx context.Context, userID int64, pairID, transcript string) error {
+	cmd, err := a.db.Exec(ctx, `UPDATE samples s SET transcript=$1 FROM pairs p WHERE s.pair_id=p.id AND p.id=$2 AND p.user_id=$3 AND p.status IN ('draft','complete')`, transcript, pairID, userID)
 	if err != nil {
 		return err
 	}
-	if cmd.RowsAffected() != 1 {
-		return errors.New("sample unavailable")
+	if cmd.RowsAffected() != 2 {
+		return errors.New("pair samples unavailable")
 	}
 	return nil
 }

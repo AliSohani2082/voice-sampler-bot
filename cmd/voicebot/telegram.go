@@ -117,6 +117,17 @@ func (a *app) registerMenu(ctx context.Context) error {
 	if err := a.call(ctx, "setMyCommands", map[string]any{"commands": commands}, nil); err != nil {
 		return err
 	}
+	if a.cfg.adminID != 0 {
+		adminCommands := append(append([]map[string]string{}, commands...),
+			map[string]string{"command": "stats", "description": "App and user statistics"},
+			map[string]string{"command": "users", "description": "Browse users and their records"},
+			map[string]string{"command": "broadcast", "description": "Message all users: /broadcast text"},
+			map[string]string{"command": "allow", "description": "Allow a user: /allow ID"},
+			map[string]string{"command": "unallow", "description": "Remove a user: /unallow ID"})
+		if err := a.call(ctx, "setMyCommands", map[string]any{"commands": adminCommands, "scope": map[string]any{"type": "chat", "chat_id": a.cfg.adminID}}, nil); err != nil {
+			return err
+		}
+	}
 	return a.call(ctx, "setChatMenuButton", map[string]any{"menu_button": map[string]string{"type": "commands"}}, nil)
 }
 
@@ -185,6 +196,9 @@ func (a *app) handle(ctx context.Context, u update) error {
 		} else if !ok {
 			return a.promptAccess(ctx, q.From.ID)
 		}
+		if _, err := a.db.Exec(ctx, `INSERT INTO users(user_id) VALUES($1) ON CONFLICT DO NOTHING`, q.From.ID); err != nil {
+			return err
+		}
 		language, err := a.getLanguage(ctx, q.From.ID)
 		if err != nil {
 			return err
@@ -203,6 +217,9 @@ func (a *app) handle(ctx context.Context, u update) error {
 		return err
 	} else if !ok {
 		return a.promptAccess(ctx, m.From.ID)
+	}
+	if _, err := a.db.Exec(ctx, `INSERT INTO users(user_id) VALUES($1) ON CONFLICT DO NOTHING`, m.From.ID); err != nil {
+		return err
 	}
 	language, err := a.getLanguage(ctx, m.From.ID)
 	if err != nil {

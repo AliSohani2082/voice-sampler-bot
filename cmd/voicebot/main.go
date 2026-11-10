@@ -23,15 +23,17 @@ import (
 type config struct {
 	token, bucket string
 	allowed       map[int64]bool
+	adminID       int64
 	admins        map[int64]bool // may approve access requests; defaults to allowed
 }
 
 type app struct {
-	cfg    config
-	db     *pgxpool.Pool
-	s3     *minio.Client
-	http   *http.Client
-	apiURL string
+	cfg              config
+	db               *pgxpool.Pool
+	s3               *minio.Client
+	http             *http.Client
+	apiURL           string
+	broadcastPending bool
 }
 
 func main() {
@@ -57,6 +59,9 @@ func main() {
 		if _, err := db.Exec(ctx, statement); err != nil {
 			log.Fatal(err)
 		}
+	}
+	if err := a.loadAllowlist(ctx); err != nil {
+		log.Fatal(err)
 	}
 	a.s3, err = minio.New(os.Getenv("S3_ENDPOINT"), &minio.Options{Creds: credentials.NewStaticV4(os.Getenv("S3_ACCESS_KEY"), os.Getenv("S3_SECRET_KEY"), ""), Secure: false})
 	if err != nil {
@@ -88,8 +93,16 @@ func loadConfig() (config, error) {
 	if c.allowed, err = parseIDs("ALLOWED_USER_IDS"); err != nil {
 		return c, err
 	}
+	if raw := strings.TrimSpace(os.Getenv("ADMIN_TELEGRAM_ID")); raw != "" {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || id <= 0 {
+			return c, errors.New("ADMIN_TELEGRAM_ID must be a positive Telegram numeric user ID")
+		}
+		c.adminID = id
+		c.allowed[c.adminID] = true
+	}
 	if len(c.allowed) == 0 {
-		return c, errors.New("ALLOWED_USER_IDS must contain at least one Telegram numeric user ID")
+		return c, errors.New("ALLOWED_USER_IDS or ADMIN_TELEGRAM_ID must contain a Telegram numeric user ID")
 	}
 	if c.admins, err = parseIDs("ADMIN_USER_IDS"); err != nil {
 		return c, err
