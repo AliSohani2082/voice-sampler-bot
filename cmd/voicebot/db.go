@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS bot_state (
 
 func (a *app) loadAllowlist(ctx context.Context) error {
 	for id := range a.cfg.allowed {
-		if id == a.cfg.adminID {
+		if a.cfg.fullAdmins[id] {
 			continue
 		}
 		if _, err := a.db.Exec(ctx, `INSERT INTO allowlist(user_id,allowed) VALUES($1,true) ON CONFLICT DO NOTHING`, id); err != nil {
@@ -140,8 +140,8 @@ func (a *app) loadAllowlist(ctx context.Context) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if a.cfg.adminID != 0 {
-		a.cfg.allowed[a.cfg.adminID] = true
+	for id := range a.cfg.fullAdmins {
+		a.cfg.allowed[id] = true
 	}
 	return nil
 }

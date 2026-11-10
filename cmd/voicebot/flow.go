@@ -19,10 +19,10 @@ func actionButtons() [][]map[string]string {
 
 func (a *app) handleMessage(ctx context.Context, m *message) error {
 	userID := m.From.ID
-	if a.cfg.adminID != 0 && userID == a.cfg.adminID && a.broadcastPending {
+	if a.cfg.fullAdmins[userID] && a.broadcastPending[userID] {
 		if strings.HasPrefix(m.Text, "/") {
 			if strings.SplitN(strings.Fields(m.Text)[0], "@", 2)[0] == "/cancel" {
-				a.broadcastPending = false
+				delete(a.broadcastPending, userID)
 				return a.send(ctx, userID, "Broadcast canceled.", nil)
 			}
 		}
@@ -31,26 +31,29 @@ func (a *app) handleMessage(ctx context.Context, m *message) error {
 		} else if len([]rune(m.Text)) > 4096 {
 			return a.send(ctx, userID, "That message is too long. Send up to 4096 characters, or use /cancel.", nil)
 		} else {
-			a.broadcastPending = false
-			return a.broadcast(ctx, m.Text)
+			delete(a.broadcastPending, userID)
+			return a.broadcast(ctx, userID, m.Text)
 		}
 	}
 	if strings.HasPrefix(m.Text, "/") {
 		command := strings.SplitN(strings.Fields(m.Text)[0], "@", 2)[0]
-		if a.cfg.adminID != 0 && userID == a.cfg.adminID {
+		if a.cfg.fullAdmins[userID] {
 			switch command {
 			case "/stats":
-				return a.adminStats(ctx)
+				return a.adminStats(ctx, userID)
 			case "/users":
-				return a.adminUsers(ctx, 0)
+				return a.adminUsers(ctx, userID, 0)
 			case "/broadcast":
 				if err := a.send(ctx, userID, "Send the text to broadcast in your next message. Use /cancel to cancel.", nil); err != nil {
 					return err
 				}
-				a.broadcastPending = true
+				if a.broadcastPending == nil {
+					a.broadcastPending = map[int64]bool{}
+				}
+				a.broadcastPending[userID] = true
 				return nil
 			case "/allow", "/unallow":
-				return a.setAllowed(ctx, strings.TrimSpace(strings.TrimPrefix(m.Text, strings.Fields(m.Text)[0])), command == "/allow")
+				return a.setAllowed(ctx, userID, strings.TrimSpace(strings.TrimPrefix(m.Text, strings.Fields(m.Text)[0])), command == "/allow")
 			}
 		}
 		switch command {
@@ -139,8 +142,8 @@ func (a *app) handleMessage(ctx context.Context, m *message) error {
 }
 
 func (a *app) handleCallback(ctx context.Context, userID int64, data string) error {
-	if a.cfg.adminID != 0 && userID == a.cfg.adminID && strings.HasPrefix(data, "admin:") {
-		return a.handleAdminCallback(ctx, data)
+	if a.cfg.fullAdmins[userID] && strings.HasPrefix(data, "admin:") {
+		return a.handleAdminCallback(ctx, userID, data)
 	}
 	parts := strings.Split(data, ":")
 	if len(parts) == 0 {
