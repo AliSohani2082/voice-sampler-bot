@@ -113,6 +113,7 @@ func (a *app) registerMenu(ctx context.Context) error {
 		{"command": "my", "description": "View my pairs / دیدن جفت‌ها"},
 		{"command": "help", "description": "How it works / راهنما"},
 		{"command": "cancel", "description": "Cancel current pair / لغو جفت فعلی"},
+		{"command": "download", "description": "Download my voices (WAV zip) / دریافت صداهای من"},
 	}
 	if err := a.call(ctx, "setMyCommands", map[string]any{"commands": commands}, nil); err != nil {
 		return err

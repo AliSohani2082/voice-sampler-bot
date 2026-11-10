@@ -25,6 +25,7 @@ Accepting takes effect immediately and is saved in the `access_requests` table, 
 - The bot repeats this for the awake voice and reminds participants to say the same sentence. After both recordings, it asks for the sentence once for the pair. Each later pair may use another sentence.
 - Aim for five seconds. Telegram voice notes reporting more than ten seconds are rejected. The bot does not transcribe audio or compare the two typed sentences.
 - `/my` lists submitted pairs and offers controls to replay or replace either recording, edit the pair transcript, or permanently delete a pair and both audio files.
+- `/download` exports your own submitted pairs (all, this week, or today, by Asia/Tehran dates) as WAV files in a zip, one folder per day; large exports arrive as several zips.
 - `/cancel` discards an unfinished pair. Starting `/new` while a pair is unfinished asks for confirmation before discarding it. In-progress work survives a bot restart.
 
 ## Admin commands

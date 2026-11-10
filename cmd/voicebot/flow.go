@@ -57,7 +57,9 @@ func (a *app) handleMessage(ctx context.Context, m *message) error {
 		case "/start":
 			return a.send(ctx, userID, "Choose your language / زبان خود را انتخاب کنید:", [][]map[string]string{{button("English", "lang:en"), button("فارسی", "lang:fa")}})
 		case "/help":
-			return a.send(ctx, userID, welcome, actionButtons())
+			return a.send(ctx, userID, helpText(ctx), actionButtons())
+		case "/download":
+			return a.send(ctx, userID, "What would you like to export?", downloadButtons())
 		case "/new":
 			return a.startPair(ctx, userID, false)
 		case "/my":
@@ -168,7 +170,14 @@ func (a *app) handleCallback(ctx context.Context, userID int64, data string) err
 		case "my":
 			return a.listPairs(ctx, userID, 0)
 		case "help":
-			return a.send(ctx, userID, welcome, actionButtons())
+			return a.send(ctx, userID, helpText(ctx), actionButtons())
+		}
+	case "dl": // always exports the pressing user's own data; the range key is the only input
+		if len(parts) == 2 {
+			if _, _, ok := exportBounds(parts[1], time.Now()); ok {
+				a.startExport(ctx, userID, parts[1])
+				return nil
+			}
 		}
 	case "newyes":
 		if len(parts) == 2 && parts[1] == s.PairID && s.Stage != "" && !strings.HasPrefix(s.Stage, "edit") {
