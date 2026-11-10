@@ -32,6 +32,7 @@ services:
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN in .env}
       ALLOWED_USER_IDS: ${ALLOWED_USER_IDS:?set ALLOWED_USER_IDS in .env}
+      ADMIN_USER_IDS: ${ADMIN_USER_IDS:-}
       DATABASE_URL: host=postgres user=voicebot dbname=voicebot sslmode=disable
       PGPASSWORD: ${POSTGRES_PASSWORD}
       S3_ENDPOINT: minio:9000

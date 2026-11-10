@@ -11,6 +11,12 @@ A private Telegram bot for collecting paired sleepy and awake voice notes. The b
 
 The first build needs internet access to download Go modules and container images. The bot polls Telegram, so no inbound port or public domain is needed. Only allowlisted Telegram user IDs can use it, and it ignores group chats. To change the allowlist, edit `.env` and run `docker compose up -d --force-recreate bot`.
 
+## Access requests
+
+A user who is not on the allowlist is offered a **Request access** button. Pressing it sends the admins a message with the person's name, @username, a link to their account, their numeric ID and, when they have one, their profile photo, with **Accept** and **Deny** buttons. Admins are the numeric IDs in the optional `ADMIN_USER_IDS` (comma-separated); if it is unset, every ID in `ALLOWED_USER_IDS` is an admin. Admins must have opened a chat with the bot to receive requests, and only admins can press the buttons.
+
+Accepting takes effect immediately and is saved in the `access_requests` table, so it survives restarts and works alongside `ALLOWED_USER_IDS`. A user with a pending request is told it is pending instead of sending another. A denied user cannot request again; to let them re-request, run `docker compose exec postgres psql -U voicebot -d voicebot -c "DELETE FROM access_requests WHERE user_id=<id>;"`. To revoke an approval, delete the same row. The first admin to answer decides; other admins' copies of the message are cleaned up when they press a button.
+
 ## Participant flow
 
 - `/start` offers English or فارسی. The choice is saved per participant and can be changed by sending `/start` again; it changes the bot's prompts and buttons, not the recordings or transcripts.

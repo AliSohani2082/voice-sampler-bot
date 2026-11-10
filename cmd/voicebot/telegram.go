@@ -24,7 +24,10 @@ type voice struct {
 }
 
 type tgUser struct {
-	ID int64 `json:"id"`
+	ID        int64  `json:"id"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Username  string `json:"username"`
 }
 
 type chat struct {
@@ -38,6 +41,7 @@ type message struct {
 	Chat      chat   `json:"chat"`
 	Text      string `json:"text"`
 	Voice     *voice `json:"voice"`
+	Photo     []any  `json:"photo"`
 }
 
 type callback struct {
@@ -153,7 +157,7 @@ func (a *app) poll(ctx context.Context) {
 				if u.Callback != nil {
 					userID = u.Callback.From.ID
 				}
-				if a.cfg.allowed[userID] {
+				if ok, _ := a.isAllowed(ctx, userID); ok {
 					_ = a.send(ctx, userID, "I couldn't finish that action. Please try again or use /start for help.", nil)
 				}
 			}
@@ -168,12 +172,18 @@ func (a *app) poll(ctx context.Context) {
 func (a *app) handle(ctx context.Context, u update) error {
 	if u.Callback != nil {
 		q := u.Callback
-		_ = a.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": q.ID}, nil)
 		if q.Message == nil || q.Message.Chat.Type != "private" || q.Message.Chat.ID != q.From.ID {
+			_ = a.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": q.ID}, nil)
 			return nil
 		}
-		if !a.cfg.allowed[q.From.ID] {
-			return a.send(ctx, q.From.ID, "You are not on the allowlist.", nil)
+		if strings.HasPrefix(q.Data, "acc:") {
+			return a.handleAccess(ctx, q) // answers the callback itself, so admins can get an alert
+		}
+		_ = a.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": q.ID}, nil)
+		if ok, err := a.isAllowed(ctx, q.From.ID); err != nil {
+			return err
+		} else if !ok {
+			return a.promptAccess(ctx, q.From.ID)
 		}
 		language, err := a.getLanguage(ctx, q.From.ID)
 		if err != nil {
@@ -189,8 +199,10 @@ func (a *app) handle(ctx context.Context, u update) error {
 	if m.Chat.Type != "private" || m.Chat.ID != m.From.ID {
 		return nil
 	}
-	if !a.cfg.allowed[m.From.ID] {
-		return a.send(ctx, m.Chat.ID, "You are not on the allowlist.", nil)
+	if ok, err := a.isAllowed(ctx, m.From.ID); err != nil {
+		return err
+	} else if !ok {
+		return a.promptAccess(ctx, m.From.ID)
 	}
 	language, err := a.getLanguage(ctx, m.From.ID)
 	if err != nil {
