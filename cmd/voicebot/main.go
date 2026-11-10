@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -34,6 +35,7 @@ type app struct {
 	http             *http.Client
 	apiURL           string
 	broadcastPending bool
+	exporting        sync.Map // user IDs with a /download export running
 }
 
 func main() {

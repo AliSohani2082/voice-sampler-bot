@@ -26,7 +26,7 @@ func TestRegisterMenu(t *testing.T) {
 			if err := json.Unmarshal(body["commands"], &commands); err != nil {
 				t.Errorf("decode commands: %v", err)
 			}
-			if len(commands) != 5 || commands[0]["command"] != "start" || commands[4]["command"] != "cancel" {
+			if len(commands) != 6 || commands[0]["command"] != "start" || commands[4]["command"] != "cancel" || commands[5]["command"] != "download" {
 				t.Errorf("unexpected commands: %v", commands)
 			}
 		}

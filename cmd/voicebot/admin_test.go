@@ -44,8 +44,8 @@ func TestAdminMenuScope(t *testing.T) {
 				t.Fatal(err)
 			}
 			if body.Scope.ChatID == 34 {
-				adminMenuFound = len(body.Commands) == 10 && body.Commands[5].Command == "stats" && body.Commands[7].Command == "broadcast" && body.Commands[8].Command == "allow" && body.Commands[9].Command == "unallow"
-			} else if len(body.Commands) != 5 {
+				adminMenuFound = len(body.Commands) == 11 && body.Commands[6].Command == "stats" && body.Commands[8].Command == "broadcast" && body.Commands[9].Command == "allow" && body.Commands[10].Command == "unallow"
+			} else if len(body.Commands) != 6 {
 				t.Errorf("admin commands leaked into default menu: %+v", body.Commands)
 			}
 		}
