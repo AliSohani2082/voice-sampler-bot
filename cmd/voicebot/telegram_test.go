@@ -26,8 +26,16 @@ func TestRegisterMenu(t *testing.T) {
 			if err := json.Unmarshal(body["commands"], &commands); err != nil {
 				t.Errorf("decode commands: %v", err)
 			}
-			if len(commands) != 6 || commands[0]["command"] != "start" || commands[4]["command"] != "cancel" || commands[5]["command"] != "download" {
-				t.Errorf("unexpected commands: %v", commands)
+			// The registry owns the list; this checks it reaches the wire intact.
+			// TestMenuCommands is where the expected names themselves live.
+			want := menuCommands(false)
+			if len(commands) != len(want) {
+				t.Errorf("sent %d commands, registry has %d: %v", len(commands), len(want), commands)
+			}
+			for i := range want {
+				if i < len(commands) && commands[i]["command"] != want[i]["command"] {
+					t.Errorf("command %d = %q, want %q", i, commands[i]["command"], want[i]["command"])
+				}
 			}
 		}
 		if r.URL.Path == "/setChatMenuButton" {

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math/rand"
 	"os/exec"
-	"strings"
 	"testing"
 	"time"
 )
@@ -30,14 +29,10 @@ func TestExportBounds(t *testing.T) {
 			t.Errorf("%q accepted", bad)
 		}
 	}
-	for _, b := range downloadButtons() {
-		for _, btn := range b {
-			if len(btn["callback_data"]) >= 64 {
-				t.Errorf("callback data too long: %q", btn["callback_data"])
-			}
-			if _, _, ok := exportBounds(strings.TrimPrefix(btn["callback_data"], "dl:"), now); !ok {
-				t.Errorf("button %q has invalid range", btn["callback_data"])
-			}
+	// Every range the /download prompt offers has to be one exportBounds accepts.
+	for _, o := range lookupCommand("download").args[0].options {
+		if _, _, ok := exportBounds(o.token, now); !ok {
+			t.Errorf("download option %q has no export range", o.token)
 		}
 	}
 }

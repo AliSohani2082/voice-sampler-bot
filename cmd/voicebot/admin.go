@@ -121,7 +121,18 @@ func (a *app) adminUserPairs(ctx context.Context, to, userID int64, page int) er
 	}
 	buttons = append(buttons, []map[string]string{button(label, fmt.Sprintf("admin:%s:%d:0", action, userID))})
 	buttons = append(buttons, []map[string]string{button("Back to users", "admin:users:0")})
-	return a.send(ctx, to, fmt.Sprintf("User %d · submitted pairs", userID), buttons)
+	// The onboarding details are what the dataset is for, so show them here.
+	// Users from before /onboard existed have none until their next /new.
+	header := fmt.Sprintf("User %d · submitted pairs", userID)
+	p, hasProfile, err := a.getProfile(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if hasProfile {
+		header = fmt.Sprintf("User %d\n%s %s · %s · age %d\nStudent number: %s\n\nSubmitted pairs:",
+			userID, p.FirstName, p.LastName, p.Gender, p.Age, p.StudentNumber)
+	}
+	return a.send(ctx, to, header, buttons)
 }
 
 func (a *app) adminPair(ctx context.Context, to, userID int64, id string) error {

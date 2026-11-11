@@ -21,18 +21,29 @@ Accepting takes effect immediately and is saved in the `access_requests` table, 
 
 - `/start` offers English or فارسی. The choice is saved per participant and can be changed by sending `/start` again; it changes the bot's prompts and buttons, not the recordings or transcripts.
 - The welcome message explains Professor Zahedi's Statistical Machine Learning assignment: 20 sleepy/awake pairs of about five seconds each for a semester-end machine learning dataset, and credits @AliSohani2082. Telegram's bottom Menu lists the commands; inline buttons suggest the next action.
-- `/new` starts a new pair. The bot asks for a sleepy Telegram voice note, then offers **Submit** or **Record a new one**.
+- `/onboard` collects the details the dataset needs: gender, age, first name, last name, and student number (شماره دانشجویی). New participants are asked right after choosing a language, one question at a time, and a half-finished questionnaire survives a bot restart. Persian and Arabic-Indic digits are accepted, so `۲۲` works for an age. A student number already registered to another Telegram account is refused; transferring one means deleting the old `profiles` row.
+- `/profile` shows the stored details with a button per field, so a single typo can be fixed without answering everything again. Running `/onboard` once the profile is complete shows the same card, and running `/profile` before it exists starts the questionnaire, so either command does the sensible thing.
+- `/new` requires a complete profile: without one it starts the questionnaire instead of a pair. If a pair is already unfinished, `/cancel` it first. Otherwise it asks for a sleepy Telegram voice note, then offers **Submit** or **Record a new one**.
 - The bot repeats this for the awake voice and reminds participants to say the same sentence. After both recordings, it asks for the sentence once for the pair. Each later pair may use another sentence.
 - Aim for five seconds. Telegram voice notes reporting more than ten seconds are rejected. The bot does not transcribe audio or compare the two typed sentences.
 - `/my` lists submitted pairs and offers controls to replay or replace either recording, edit the pair transcript, or permanently delete a pair and both audio files.
 - `/download` exports your own submitted pairs (all, this week, or today, by Asia/Tehran dates) as WAV files in a zip, one folder per day; large exports arrive as several zips.
-- `/cancel` discards an unfinished pair. Starting `/new` while a pair is unfinished asks for confirmation before discarding it. In-progress work survives a bot restart.
+- `/leader d` ranks today's top recorders by completed pairs and `/leader w` ranks the current week, which starts on Saturday in Asia/Tehran. Add `l` — `/leader w l` — for a longer board with recordings and audio minutes per person, plus your own rank. Leave the day or week out and the bot asks which you meant. Participants are shown by the name they entered in `/onboard`, so the board is visible to the whole class; admins are not ranked. Deleting a pair removes its leaderboard credit.
+- `/cancel` discards an unfinished pair, or abandons a half-finished questionnaire or broadcast prompt. Starting `/new` while a pair is unfinished asks for confirmation before discarding it. In-progress work survives a bot restart.
+
+## Commands with arguments
+
+Commands are described in one place, `cmd/voicebot/registry.go`, as a name plus the arguments it takes. An argument is either one of a fixed set of values (`d` or `w` for `/leader`, `all`/`week`/`today` for `/download`), a flag that is simply present or absent (`l`), or free text (a student number, a broadcast body). Each one is mandatory or optional.
+
+Leaving a mandatory argument out is not an error: the bot asks for it. A fixed set of values becomes a row of buttons, and free text is answered with the next message. So `/leader` and `/leader w` both work, and so do `/download today` and `/start fa`. Answering by button is identical to having typed the argument, because each button carries the whole command line it replays. The same description generates Telegram's command menu, so there is one list to keep up to date.
 
 ## Admin commands
 
 Each user in `ADMIN_TELEGRAM_ID` (one ID or several, comma-separated) can use `/stats` for user, pair, recording, and storage totals; `/users` to browse users and open their submitted pairs; `/allow 123456789` and `/unallow 123456789` to change access; and `/broadcast` to be prompted for a message in the next chat message. Use `/cancel` to cancel the prompt. Adding an ID also puts it in `/users` and broadcast attempts, but the recipient must send `/start` before the bot can deliver messages. A user's record view also has an allowlist button. Admins can read transcripts and play recordings, but the admin view has no edit or delete controls. Each admin gets the replies to their own commands. Broadcasts exclude all admins and report failed deliveries.
 
-The bot stores the participant's Telegram numeric ID, Telegram file ID and unique file ID, reported duration, downloaded byte count, MIME type, transcript, timestamps, and bucket object key. The recordings remain private in MinIO. A startup and periodic cleanup job retries failed object deletions.
+A user's record view in `/users` also shows their onboarding details, since that is the metadata the dataset is for.
+
+The bot stores the participant's Telegram numeric ID, the first name and username Telegram reports, the gender, age, first name, last name and student number entered in `/onboard`, and per recording the Telegram file ID and unique file ID, reported duration, downloaded byte count, MIME type, transcript, timestamps, and bucket object key. The recordings remain private in MinIO. Note that `/leader` shows participants' entered names to each other; nothing else about a profile is visible to other participants. A startup and periodic cleanup job retries failed object deletions.
 
 ## Access the data
 

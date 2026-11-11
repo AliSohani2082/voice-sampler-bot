@@ -106,24 +106,14 @@ func button(label, data string) map[string]string {
 	return map[string]string{"text": label, "callback_data": data}
 }
 
+// registerMenu publishes the menu from the command registry, so the list of
+// commands exists in exactly one place. Admin commands are scoped to each full
+// admin's own chat, so ordinary users never see them.
 func (a *app) registerMenu(ctx context.Context) error {
-	commands := []map[string]string{
-		{"command": "start", "description": "Choose language / انتخاب زبان"},
-		{"command": "new", "description": "Record a pair / ضبط جفت صدا"},
-		{"command": "my", "description": "View my pairs / دیدن جفت‌ها"},
-		{"command": "help", "description": "How it works / راهنما"},
-		{"command": "cancel", "description": "Cancel current pair / لغو جفت فعلی"},
-		{"command": "download", "description": "Download my voices (WAV zip) / دریافت صداهای من"},
-	}
-	if err := a.call(ctx, "setMyCommands", map[string]any{"commands": commands}, nil); err != nil {
+	if err := a.call(ctx, "setMyCommands", map[string]any{"commands": menuCommands(false)}, nil); err != nil {
 		return err
 	}
-	adminCommands := append(append([]map[string]string{}, commands...),
-		map[string]string{"command": "stats", "description": "App and user statistics"},
-		map[string]string{"command": "users", "description": "Browse users and their records"},
-		map[string]string{"command": "broadcast", "description": "Message all users: /broadcast text"},
-		map[string]string{"command": "allow", "description": "Allow a user: /allow ID"},
-		map[string]string{"command": "unallow", "description": "Remove a user: /unallow ID"})
+	adminCommands := menuCommands(true)
 	for id := range a.cfg.fullAdmins {
 		if err := a.call(ctx, "setMyCommands", map[string]any{"commands": adminCommands, "scope": map[string]any{"type": "chat", "chat_id": id}}, nil); err != nil {
 			return err
@@ -197,7 +187,7 @@ func (a *app) handle(ctx context.Context, u update) error {
 		} else if !ok {
 			return a.promptAccess(ctx, q.From.ID)
 		}
-		if _, err := a.db.Exec(ctx, `INSERT INTO users(user_id) VALUES($1) ON CONFLICT DO NOTHING`, q.From.ID); err != nil {
+		if err := a.upsertUser(ctx, q.From); err != nil {
 			return err
 		}
 		language, err := a.getLanguage(ctx, q.From.ID)
@@ -219,7 +209,7 @@ func (a *app) handle(ctx context.Context, u update) error {
 	} else if !ok {
 		return a.promptAccess(ctx, m.From.ID)
 	}
-	if _, err := a.db.Exec(ctx, `INSERT INTO users(user_id) VALUES($1) ON CONFLICT DO NOTHING`, m.From.ID); err != nil {
+	if err := a.upsertUser(ctx, m.From); err != nil {
 		return err
 	}
 	language, err := a.getLanguage(ctx, m.From.ID)

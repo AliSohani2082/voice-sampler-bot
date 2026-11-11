@@ -19,63 +19,21 @@ func actionButtons() [][]map[string]string {
 
 func (a *app) handleMessage(ctx context.Context, m *message) error {
 	userID := m.From.ID
-	if a.cfg.fullAdmins[userID] && a.broadcastPending[userID] {
-		if strings.HasPrefix(m.Text, "/") {
-			if strings.SplitN(strings.Fields(m.Text)[0], "@", 2)[0] == "/cancel" {
-				delete(a.broadcastPending, userID)
-				return a.send(ctx, userID, "Broadcast canceled.", nil)
-			}
-		}
-		if strings.TrimSpace(m.Text) == "" {
-			return a.send(ctx, userID, "Please send the text to broadcast, or use /cancel.", nil)
-		} else if len([]rune(m.Text)) > 4096 {
-			return a.send(ctx, userID, "That message is too long. Send up to 4096 characters, or use /cancel.", nil)
-		} else {
-			delete(a.broadcastPending, userID)
-			return a.broadcast(ctx, userID, m.Text)
-		}
-	}
 	if strings.HasPrefix(m.Text, "/") {
-		command := strings.SplitN(strings.Fields(m.Text)[0], "@", 2)[0]
-		if a.cfg.fullAdmins[userID] {
-			switch command {
-			case "/stats":
-				return a.adminStats(ctx, userID)
-			case "/users":
-				return a.adminUsers(ctx, userID, 0)
-			case "/broadcast":
-				if err := a.send(ctx, userID, "Send the text to broadcast in your next message. Use /cancel to cancel.", nil); err != nil {
-					return err
-				}
-				if a.broadcastPending == nil {
-					a.broadcastPending = map[int64]bool{}
-				}
-				a.broadcastPending[userID] = true
-				return nil
-			case "/allow", "/unallow":
-				return a.setAllowed(ctx, userID, strings.TrimSpace(strings.TrimPrefix(m.Text, strings.Fields(m.Text)[0])), command == "/allow")
-			}
-		}
-		switch command {
-		case "/start":
-			return a.send(ctx, userID, "Choose your language / زبان خود را انتخاب کنید:", [][]map[string]string{{button("English", "lang:en"), button("فارسی", "lang:fa")}})
-		case "/help":
-			return a.send(ctx, userID, helpText(ctx), actionButtons())
-		case "/download":
-			return a.send(ctx, userID, "What would you like to export?", downloadButtons())
-		case "/new":
-			return a.startPair(ctx, userID, false)
-		case "/my":
-			return a.listPairs(ctx, userID, 0)
-		case "/cancel":
-			return a.cancel(ctx, userID)
-		default:
-			return a.send(ctx, userID, "Choose an option below or open the Menu for commands.", actionButtons())
-		}
+		// Everything after the command word is the argument text; the registry
+		// decides what it means. strings.Cut also makes a bare "/" harmless.
+		head, rest, _ := strings.Cut(m.Text, " ")
+		name := strings.ToLower(strings.TrimPrefix(strings.SplitN(head, "@", 2)[0], "/"))
+		return a.runCommand(ctx, userID, name, rest)
 	}
 	s, err := a.getSession(ctx, userID)
 	if err != nil {
 		return err
+	}
+	// A command waiting for a typed argument takes this message as its answer.
+	// Checked before the recording stages, whose prefixes await: never matches.
+	if strings.HasPrefix(s.Stage, awaitPrefix) {
+		return a.resumePending(ctx, userID, s, m.Text)
 	}
 	if s.Stage == "" {
 		return a.send(ctx, userID, "Ready for another pair?", actionButtons())
@@ -145,6 +103,15 @@ func (a *app) handleCallback(ctx context.Context, userID int64, data string) err
 	if a.cfg.fullAdmins[userID] && strings.HasPrefix(data, "admin:") {
 		return a.handleAdminCallback(ctx, userID, data)
 	}
+	// An argument prompt's buttons replay the whole command line, so they go
+	// straight back through the one dispatch path — which re-checks adminOnly,
+	// since only the admin: prefix above is gated before here.
+	if strings.HasPrefix(data, cmdPrefix) {
+		if parts := strings.SplitN(data, ":", 3); len(parts) == 3 {
+			return a.runCommand(ctx, userID, parts[1], strings.ReplaceAll(parts[2], ".", " "))
+		}
+		return a.send(ctx, userID, unknownCommand, actionButtons())
+	}
 	parts := strings.Split(data, ":")
 	if len(parts) == 0 {
 		return nil
@@ -154,33 +121,20 @@ func (a *app) handleCallback(ctx context.Context, userID int64, data string) err
 		return err
 	}
 	switch parts[0] {
+	// lang:, action: and dl: predate the command registry. They stay as thin
+	// forwarders so buttons already sitting in users' chat histories keep working.
 	case "lang":
-		if len(parts) != 2 || (parts[1] != "en" && parts[1] != "fa") {
-			break
+		if len(parts) == 2 && (parts[1] == "en" || parts[1] == "fa") {
+			return a.runCommand(ctx, userID, "start", parts[1])
 		}
-		if err := a.setLanguage(ctx, userID, parts[1]); err != nil {
-			return err
-		}
-		ctx = withLanguage(ctx, parts[1])
-		return a.send(ctx, userID, welcome, actionButtons())
 	case "action":
-		if len(parts) != 2 {
-			break
+		// Named explicitly, so a forged action:stats cannot reach the admin check.
+		if len(parts) == 2 && (parts[1] == "new" || parts[1] == "my" || parts[1] == "help") {
+			return a.runCommand(ctx, userID, parts[1], "")
 		}
-		switch parts[1] {
-		case "new":
-			return a.startPair(ctx, userID, false)
-		case "my":
-			return a.listPairs(ctx, userID, 0)
-		case "help":
-			return a.send(ctx, userID, helpText(ctx), actionButtons())
-		}
-	case "dl": // always exports the pressing user's own data; the range key is the only input
+	case "dl": // always exports the pressing user's own data
 		if len(parts) == 2 {
-			if _, _, ok := exportBounds(parts[1], time.Now()); ok {
-				a.startExport(ctx, userID, parts[1])
-				return nil
-			}
+			return a.runCommand(ctx, userID, "download", parts[1])
 		}
 	case "newyes":
 		if len(parts) == 2 && parts[1] == s.PairID && s.Stage != "" && !strings.HasPrefix(s.Stage, "edit") {
@@ -349,6 +303,14 @@ func (a *app) cancel(ctx context.Context, userID int64) error {
 	s, err := a.getSession(ctx, userID)
 	if err != nil {
 		return err
+	}
+	// Checked first: a collection's row carries no pair, so the draft cleanup
+	// below would try to delete an empty pair id.
+	if strings.HasPrefix(s.Stage, awaitPrefix) {
+		if err := a.clearSession(ctx, userID); err != nil {
+			return err
+		}
+		return a.send(ctx, userID, canceled, nil)
 	}
 	if s.Stage == "" {
 		return a.send(ctx, userID, "Nothing to cancel.", nil)
