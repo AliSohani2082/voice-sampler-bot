@@ -95,10 +95,22 @@ func TestAdminMenuScope(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatal(err)
 			}
+			sameAs := func(want []map[string]string) bool {
+				if len(body.Commands) != len(want) {
+					return false
+				}
+				for i := range want {
+					if body.Commands[i].Command != want[i]["command"] {
+						return false
+					}
+				}
+				return true
+			}
 			if body.Scope.ChatID != 0 {
-				adminMenus[body.Scope.ChatID] = len(body.Commands) == 11 && body.Commands[6].Command == "stats" && body.Commands[8].Command == "broadcast" && body.Commands[9].Command == "allow" && body.Commands[10].Command == "unallow"
-			} else if len(body.Commands) != 6 {
-				t.Errorf("admin commands leaked into default menu: %+v", body.Commands)
+				adminMenus[body.Scope.ChatID] = sameAs(menuCommands(true))
+			} else if !sameAs(menuCommands(false)) {
+				// Stronger than a length check: a leak of equal length fails too.
+				t.Errorf("default menu is not the public registry: %+v", body.Commands)
 			}
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":true,"result":true}`)), Header: make(http.Header)}, nil
@@ -143,6 +155,11 @@ func TestAdminCommandAuthorizationAndReplyTarget(t *testing.T) {
 		if len(sent) != 1 || sent[0].ChatID != tc.user || strings.Contains(sent[0].Text, "Use /allow ID") != tc.admin {
 			t.Errorf("user %d (admin=%v): sent %+v", tc.user, tc.admin, sent)
 		}
+		// A non-admin gets the same reply as for a typo, so an admin command
+		// never reveals that it exists.
+		if !tc.admin && sent[0].Text != unknownCommand {
+			t.Errorf("user %d reply leaks command existence: %q", tc.user, sent[0].Text)
+		}
 	}
 	// Admin callbacks answer the pressing admin; "admin:user:34:0" is rejected for targeting an admin.
 	for _, admin := range []int64{34, 35} {
@@ -156,21 +173,43 @@ func TestAdminCommandAuthorizationAndReplyTarget(t *testing.T) {
 	}
 }
 
-func TestBroadcastPendingIsPerAdmin(t *testing.T) {
-	var sent []sentMessage
-	a := newAdminTestApp(t, &sent)
-	for _, admin := range []int64{34, 35} {
-		if err := a.handleMessage(context.Background(), &message{From: tgUser{ID: admin}, Text: "/broadcast"}); err != nil {
-			t.Fatal(err)
+// Broadcast is now an ordinary command with one awaited text argument, and the
+// prompt lives in that admin's own sessions row rather than a shared in-memory
+// map, so per-admin isolation is structural rather than something to assert. What
+// is worth pinning is the registry entry that replaced the map.
+func TestBroadcastIsAnAwaitedTextCommand(t *testing.T) {
+	c := lookupCommand("broadcast")
+	if c == nil || !c.adminOnly || len(c.args) != 1 {
+		t.Fatalf("broadcast spec = %+v", c)
+	}
+	s := c.args[0]
+	if s.kind != argText || !s.mandatory || s.maxRunes != 4096 {
+		t.Errorf("broadcast arg = %+v", s)
+	}
+	if !strings.Contains(s.ask, "/cancel") {
+		t.Errorf("the broadcast prompt must say how to cancel: %q", s.ask)
+	}
+	// The body is taken verbatim: neither lowercased nor split into tokens.
+	p, missing, bad := c.parse("  Hello World  ")
+	if bad != "" || len(missing) != 0 || p.get("text") != "Hello World" {
+		t.Errorf("parse = %q, missing %v, bad %q", p.get("text"), missing, bad)
+	}
+	if _, missing, _ := c.parse(""); len(missing) != 1 {
+		t.Errorf("a bare /broadcast must leave its text to be asked for, missing %v", missing)
+	}
+}
+
+func TestAwaitStageIsDistinctFromRecordingStages(t *testing.T) {
+	stage := awaitStage("broadcast")
+	name, ok := strings.CutPrefix(stage, awaitPrefix)
+	if !ok || name != "broadcast" {
+		t.Fatalf("awaitStage round trip: %q gave %q, %v", stage, name, ok)
+	}
+	// A collection shares the sessions row with the recording flow, which
+	// dispatches on these prefixes, so it must match none of them.
+	for _, prefix := range []string{"voice:", "confirm:", "text:", "editvoice:", "editconfirm:", "edittext:"} {
+		if strings.HasPrefix(stage, prefix) {
+			t.Errorf("await stage %q collides with recording prefix %q", stage, prefix)
 		}
-	}
-	if !a.broadcastPending[34] || !a.broadcastPending[35] {
-		t.Fatalf("pending = %v", a.broadcastPending)
-	}
-	if err := a.handleMessage(context.Background(), &message{From: tgUser{ID: 34}, Text: "/cancel"}); err != nil {
-		t.Fatal(err)
-	}
-	if a.broadcastPending[34] || !a.broadcastPending[35] {
-		t.Fatalf("canceling one admin's broadcast changed the other's: %v", a.broadcastPending)
 	}
 }

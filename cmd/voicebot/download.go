@@ -40,10 +40,6 @@ func helpText(ctx context.Context) string {
 	return translate(ctx, welcome) + "\n\n" + translate(ctx, downloadHelp)
 }
 
-func downloadButtons() [][]map[string]string {
-	return [][]map[string]string{{button("All my records", "dl:all")}, {button("This week", "dl:week"), button("Today", "dl:today")}}
-}
-
 // exportBounds returns the half-open completion-time range [from, to) for a callback range key.
 // Week is the last 7 calendar days including today, not a Monday-start week.
 func exportBounds(kind string, now time.Time) (from, to time.Time, ok bool) {

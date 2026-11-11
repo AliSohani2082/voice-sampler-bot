@@ -29,13 +29,12 @@ type config struct {
 }
 
 type app struct {
-	cfg              config
-	db               *pgxpool.Pool
-	s3               *minio.Client
-	http             *http.Client
-	apiURL           string
-	broadcastPending map[int64]bool // per admin: waiting for the broadcast text
-	exporting        sync.Map       // user IDs with a /download export running
+	cfg       config
+	db        *pgxpool.Pool
+	s3        *minio.Client
+	http      *http.Client
+	apiURL    string
+	exporting sync.Map // user IDs with a /download export running
 }
 
 func main() {
