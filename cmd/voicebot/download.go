@@ -59,15 +59,21 @@ func exportBounds(kind string, now time.Time) (from, to time.Time, ok bool) {
 
 type exportItem struct {
 	Key  string // S3 object key
-	Path string // path inside the zip: YYYY-MM-DD/HHMMSS_<pair>_<kind>.wav
+	Path string // path inside the zip: YYYY-MM-DD/HHMMSS_<pair>/<Sleepy|fresh>-<student number>.wav
 	At   time.Time
 }
 
-func exportPath(completed time.Time, pairID, kind string) string {
+// exportPath names a recording as the course requires: Sleepy-SID.wav or fresh-SID.wav (SID is the student
+// number). A student has many pairs, so each pair gets its own folder to keep the file names unique.
+func exportPath(completed time.Time, pairID, kind, studentNumber string) string {
 	if len(pairID) > 8 {
 		pairID = pairID[:8]
 	}
-	return completed.In(exportLoc).Format("2006-01-02/150405") + "_" + pairID + "_" + kind + ".wav"
+	prefix := "fresh"
+	if kind == "sleepy" {
+		prefix = "Sleepy"
+	}
+	return completed.In(exportLoc).Format("2006-01-02/150405") + "_" + pairID + "/" + prefix + "-" + studentNumber + ".wav"
 }
 
 func exportFilename(kind string, now time.Time, part int, last bool) string {
@@ -162,7 +168,7 @@ func (a *app) fetchWAV(ctx context.Context, key string) ([]byte, error) {
 
 // exportItems always filters by the caller's own user_id; callback data never carries IDs.
 func (a *app) exportItems(ctx context.Context, userID int64, from, to time.Time) ([]exportItem, error) {
-	rows, err := a.db.Query(ctx, `SELECT p.completed_at,p.id,s.kind,s.object_key FROM pairs p JOIN samples s ON s.pair_id=p.id WHERE p.user_id=$1 AND p.status='complete' AND p.completed_at>=$2 AND p.completed_at<$3 ORDER BY p.completed_at,p.id,s.kind`, userID, from, to)
+	rows, err := a.db.Query(ctx, `SELECT p.completed_at,p.id,s.kind,s.object_key,pr.student_number FROM pairs p JOIN samples s ON s.pair_id=p.id JOIN profiles pr ON pr.user_id=p.user_id WHERE p.user_id=$1 AND p.status='complete' AND p.completed_at>=$2 AND p.completed_at<$3 ORDER BY p.completed_at,p.id,s.kind`, userID, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -170,11 +176,11 @@ func (a *app) exportItems(ctx context.Context, userID int64, from, to time.Time)
 	var items []exportItem
 	for rows.Next() {
 		var at time.Time
-		var id, kind, key string
-		if err := rows.Scan(&at, &id, &kind, &key); err != nil {
+		var id, kind, key, student string
+		if err := rows.Scan(&at, &id, &kind, &key, &student); err != nil {
 			return nil, err
 		}
-		items = append(items, exportItem{Key: key, Path: exportPath(at, id, kind), At: at})
+		items = append(items, exportItem{Key: key, Path: exportPath(at, id, kind, student), At: at})
 	}
 	return items, rows.Err()
 }
