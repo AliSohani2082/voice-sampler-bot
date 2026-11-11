@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // Replies the dispatcher itself sends. They are consts so language.go and the
@@ -33,8 +34,8 @@ type argOption struct {
 }
 
 type argSpec struct {
-	name      string      // slot name for cmdArgs lookups; never shown to the user
-	kind      argKind     //
+	name      string // slot name for cmdArgs lookups; never shown to the user
+	kind      argKind
 	mandatory bool        // argChoice and argText only
 	token     string      // argFlag: the token that sets it
 	options   []argOption // argChoice: accepted tokens, in button order
@@ -67,14 +68,18 @@ type cmdArgs struct {
 	flags  map[string]bool   // flag presence, by slot name
 }
 
+// newArgs returns args with its maps ready to write to.
 func newArgs() cmdArgs {
 	return cmdArgs{values: map[string]string{}, flags: map[string]bool{}}
 }
 
+// get returns a slot's value, or "" when it is unanswered.
 func (p cmdArgs) get(name string) string { return p.values[name] }
 
+// has reports whether a slot has been answered, by value or by flag.
 func (p cmdArgs) has(name string) bool { return p.flags[name] || p.values[name] != "" }
 
+// setValue answers a choice or text slot.
 func (p *cmdArgs) setValue(name, value string) {
 	if p.values == nil {
 		p.values = map[string]string{}
@@ -82,6 +87,7 @@ func (p *cmdArgs) setValue(name, value string) {
 	p.values[name] = value
 }
 
+// setFlag marks a flag slot present.
 func (p *cmdArgs) setFlag(name string) {
 	if p.flags == nil {
 		p.flags = map[string]bool{}
@@ -105,6 +111,8 @@ func (p *cmdArgs) fill(src cmdArgs) {
 	}
 }
 
+// lookupCommand finds a command by name, or returns nil. It hands back a
+// pointer into the registry, which callers must treat as read-only.
 func lookupCommand(name string) *commandSpec {
 	for i := range commandSpecs {
 		if commandSpecs[i].name == name {
@@ -158,6 +166,19 @@ func (c *commandSpec) collects() bool {
 		}
 	}
 	return n > 1
+}
+
+// awaits reports whether c can leave a stored collection behind. Only a typed
+// answer needs one, because a choice slot's buttons carry every answer
+// themselves, so only a command with a mandatory text slot can — which is why a
+// plain /leader or /download never has to go looking for one.
+func (c *commandSpec) awaits() bool {
+	for i := range c.args {
+		if c.args[i].kind == argText && c.args[i].mandatory {
+			return true
+		}
+	}
+	return false
 }
 
 // firstChoiceSlot reports the index of the first choice slot the bot can put a
@@ -269,6 +290,8 @@ type pendingCommand struct {
 	Flags   []string          `json:"flags,omitempty"`
 }
 
+// encodePending renders the answers gathered so far for storage in
+// sessions.pending, tagged with the command they belong to.
 func encodePending(c *commandSpec, p cmdArgs) []byte {
 	stored := pendingCommand{Command: c.name, Values: map[string]string{}}
 	for name, value := range p.values {
@@ -347,6 +370,7 @@ func normalizeDigits(s string) string {
 	}, s)
 }
 
+// digitsOnly reports whether s is a non-empty run of ASCII digits.
 func digitsOnly(s string) bool {
 	if s == "" {
 		return false
@@ -387,13 +411,22 @@ func digitString(lo, hi int, reply string) func(string) (string, string) {
 	}
 }
 
-// nonEmptyText builds a validator for a free-text answer that only has to be
-// present; validateSlot has already applied maxRunes.
-func nonEmptyText(reply string) func(string) (string, string) {
+// plainLine builds a validator for a one-line answer: present, and free of line
+// breaks and other control characters. validateSlot has already applied maxRunes.
+//
+// A name carrying a newline would break the profile card's layout and, worse, let
+// one participant inject extra rows into the leaderboard every other participant
+// reads. Rejecting it at the input is what keeps both renderers honest.
+func plainLine(reply string) func(string) (string, string) {
 	return func(raw string) (string, string) {
 		v := strings.TrimSpace(raw)
 		if v == "" {
 			return "", reply
+		}
+		for _, r := range v {
+			if unicode.IsControl(r) {
+				return "", reply
+			}
 		}
 		return v, ""
 	}
@@ -474,8 +507,11 @@ func (a *app) collect(ctx context.Context, userID int64, c *commandSpec, p cmdAr
 	if len(missing) == 0 {
 		// Drop a collection row before running, including one left by an earlier
 		// attempt at this same command — otherwise the user's next message would
-		// be read as an answer to a question they have already moved past.
-		if stored || c.collects() {
+		// be read as an answer to a question they have already moved past. This
+		// covers a one-slot command answered on the command line (/broadcast text
+		// after a bare /broadcast), which never restores answers and so would
+		// otherwise leave its row in place.
+		if stored || c.awaits() {
 			if err := a.clearCollection(ctx, userID); err != nil {
 				return err
 			}
@@ -524,6 +560,14 @@ func (a *app) askSlot(ctx context.Context, userID int64, c *commandSpec, p cmdAr
 	if s.kind != argChoice {
 		return a.send(ctx, userID, text, nil)
 	}
+	// The buttons supply this slot's own answer, so what they carry must not
+	// already hold one. Otherwise re-asking a slot that was answered twice
+	// (/leader d w) offers buttons that conflict with the value already parsed,
+	// and the same question repeats forever. Other slots are preserved, so a
+	// flag such as /leader l survives the question.
+	offered := newArgs()
+	offered.fill(p)
+	delete(offered.values, s.name)
 	perRow := s.perRow
 	if perRow <= 0 {
 		perRow = 2
@@ -531,7 +575,7 @@ func (a *app) askSlot(ctx context.Context, userID int64, c *commandSpec, p cmdAr
 	var rows [][]map[string]string
 	var row []map[string]string
 	for _, o := range s.options {
-		row = append(row, button(o.label, c.callbackData(p, o.token)))
+		row = append(row, button(o.label, c.callbackData(offered, o.token)))
 		if len(row) == perRow {
 			rows, row = append(rows, row), nil
 		}

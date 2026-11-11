@@ -72,14 +72,16 @@ func TestLeaderName(t *testing.T) {
 		{"", "Sohani", "Tg", "tguser", "Sohani"},
 		{"", "", "Tg", "tguser", "Tg"},
 		{"", "", "", "tguser", "@tguser"},
-		{"", "", "", "", "User 42"},
+		// Nothing stored yet: anonymous, never a numeric id the whole class
+		// could read off the board.
+		{"", "", "", "", leaderAnonymous},
 	} {
-		if got := leaderName(ctx, tc.first, tc.last, tc.tgFirst, tc.tgUsername, 42); got != tc.want {
+		if got := leaderName(ctx, tc.first, tc.last, tc.tgFirst, tc.tgUsername); got != tc.want {
 			t.Errorf("leaderName(%q, %q, %q, %q) = %q, want %q", tc.first, tc.last, tc.tgFirst, tc.tgUsername, got, tc.want)
 		}
 	}
 	// One very long name must not stretch every row of the board.
-	long := leaderName(ctx, strings.Repeat("a", 40), strings.Repeat("b", 40), "", "", 42)
+	long := leaderName(ctx, strings.Repeat("a", 40), strings.Repeat("b", 40), "", "")
 	if n := len([]rune(long)); n != 32 {
 		t.Errorf("a long name rendered %d runes: %q", n, long)
 	}

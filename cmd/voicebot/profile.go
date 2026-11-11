@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -14,7 +15,7 @@ import (
 // translate works on whole strings, so each question and each rejection has to be
 // one authored sentence rather than something composed at runtime.
 const (
-	onboardIntro = "Before you record, the class needs a few details about you. They are stored with your recordings and used only for the course dataset."
+	onboardIntro = "Before you record, the class needs a few details about you. They are stored with your recordings for the course dataset. Your first and last name are also shown to other participants on the /leader board; nothing else about you is."
 	askGender    = "What is your gender?"
 	askAge       = "How old are you? Send your age as a number."
 	badAge       = "Please send your age as a number between 10 and 100."
@@ -35,9 +36,6 @@ type profile struct {
 	StudentNumber string
 }
 
-// name is how a participant is shown to others, on the leaderboard and the card.
-func (p profile) name() string { return truncate(p.FirstName+" "+p.LastName, 32) }
-
 // args turns a stored profile back into collector answers, so editing one field
 // can seed the other four and leave exactly one question to ask.
 func (p profile) args() cmdArgs {
@@ -50,6 +48,7 @@ func (p profile) args() cmdArgs {
 	return a
 }
 
+// genderToken is the questionnaire token for a stored gender.
 func genderToken(word string) string {
 	if word == "female" {
 		return "f"
@@ -57,6 +56,7 @@ func genderToken(word string) string {
 	return "m"
 }
 
+// genderWord is the stored gender for a questionnaire token.
 func genderWord(token string) string {
 	if token == "f" {
 		return "female"
@@ -64,6 +64,7 @@ func genderWord(token string) string {
 	return "male"
 }
 
+// genderLabel is a stored gender in the reader's own language.
 func genderLabel(ctx context.Context, word string) string {
 	if word == "female" {
 		return translate(ctx, "Female")
@@ -80,9 +81,9 @@ func profileFields() []argSpec {
 		{name: "age", kind: argText, mandatory: true, ask: askAge, maxRunes: 8,
 			validate: numberBetween(10, 100, badAge)},
 		{name: "first", kind: argText, mandatory: true, ask: askFirstName, maxRunes: 64,
-			validate: nonEmptyText(askFirstName)},
+			validate: plainLine(askFirstName)},
 		{name: "last", kind: argText, mandatory: true, ask: askLastName, maxRunes: 64,
-			validate: nonEmptyText(askLastName)},
+			validate: plainLine(askLastName)},
 		{name: "student", kind: argText, mandatory: true, ask: askStudent, maxRunes: 24,
 			validate: digitString(5, 20, badStudent)},
 	}
@@ -115,6 +116,8 @@ func profileEditSlot(token string) string {
 	return ""
 }
 
+// getProfile reads a participant's profile. The bool reports whether one
+// exists, which is the whole test for "has this participant onboarded".
 func (a *app) getProfile(ctx context.Context, userID int64) (profile, bool, error) {
 	var p profile
 	err := a.db.QueryRow(ctx, `SELECT gender,age,first_name,last_name,student_number FROM profiles WHERE user_id=$1`, userID).
@@ -128,6 +131,9 @@ func (a *app) getProfile(ctx context.Context, userID int64) (profile, bool, erro
 	return p, true, nil
 }
 
+// putProfile writes all five answers as one row. A student number another
+// account already holds surfaces as SQLSTATE 23505, which the caller recovers
+// from by asking for that one field again.
 func (a *app) putProfile(ctx context.Context, userID int64, p profile) error {
 	_, err := a.db.Exec(ctx, `INSERT INTO profiles(user_id,gender,age,first_name,last_name,student_number,updated_at) VALUES($1,$2,$3,$4,$5,$6,now()) ON CONFLICT(user_id) DO UPDATE SET gender=$2,age=$3,first_name=$4,last_name=$5,student_number=$6,updated_at=now()`,
 		userID, p.Gender, p.Age, p.FirstName, p.LastName, p.StudentNumber)
@@ -158,7 +164,21 @@ func (a *app) startOnboarding(ctx context.Context, userID int64) error {
 	if err := a.send(ctx, userID, onboardIntro, nil); err != nil {
 		return err
 	}
-	return a.collect(ctx, userID, lookupCommand("onboard"), newArgs(), false)
+	spec := lookupCommand("onboard")
+	// Resume a half-finished questionnaire rather than opening with a question
+	// the participant has already answered. This path is reached from /start and
+	// from the /new gate, neither of which goes through runCommand's own restore.
+	answers, stored := newArgs(), false
+	s, err := a.getSession(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if stage, ok := strings.CutPrefix(s.Stage, awaitPrefix); ok && stage == spec.name {
+		if restored, ok := decodePending(spec, s.Pending); ok {
+			answers, stored = restored, true
+		}
+	}
+	return a.collect(ctx, userID, spec, answers, stored)
 }
 
 // onboardIfNew onboards a participant who has no profile yet, so a new user is
@@ -216,6 +236,9 @@ func onboardPrecheck(a *app, ctx context.Context, userID int64, _ cmdArgs) (bool
 	if profileEntry(ok, "") != actionCard {
 		return false, cmdArgs{}, nil
 	}
+	if err := a.clearCollection(ctx, userID); err != nil {
+		return false, cmdArgs{}, err
+	}
 	return true, cmdArgs{}, a.showProfile(ctx, userID, stored)
 }
 
@@ -231,6 +254,12 @@ func profilePrecheck(a *app, ctx context.Context, userID int64, p cmdArgs) (bool
 	case actionQuestionnaire:
 		return true, cmdArgs{}, a.startOnboarding(ctx, userID)
 	case actionCard:
+		// The card ends an edit that was waiting on an answer, so its collection
+		// must go with it: otherwise the next ordinary message is read as that
+		// answer and silently rewrites the field.
+		if err := a.clearCollection(ctx, userID); err != nil {
+			return false, cmdArgs{}, err
+		}
 		return true, cmdArgs{}, a.showProfile(ctx, userID, stored)
 	}
 	seed := stored.args()

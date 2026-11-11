@@ -138,6 +138,12 @@ func (a *app) handleCallback(ctx context.Context, userID int64, data string) err
 		}
 	case "newyes":
 		if len(parts) == 2 && parts[1] == s.PairID && s.Stage != "" && !strings.HasPrefix(s.Stage, "edit") {
+			// The same gate /new applies. Reachable without it only by replaying a
+			// Start over button from before onboarding existed, which must not
+			// create a pair with no details attached.
+			if handled, _, err := requireProfile(a, ctx, userID, cmdArgs{}); err != nil || handled {
+				return err
+			}
 			return a.startPair(ctx, userID, true)
 		}
 	case "keep":

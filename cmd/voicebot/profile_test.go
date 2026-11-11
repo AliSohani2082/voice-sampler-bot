@@ -77,6 +77,19 @@ func TestNameValidation(t *testing.T) {
 				t.Errorf("%s accepted %d chars as %q", slot, len(raw), value)
 			}
 		}
+		// A newline in a name would break the profile card's layout and let one
+		// participant inject extra rows into the shared leaderboard.
+		for _, raw := range []string{
+			"Ali\nSohani",
+			"Ali\n2. Fake \u2014 pairs: 99",
+			"Ali\rSohani",
+			"Ali\tSohani",
+			"Ali\u0000Sohani",
+		} {
+			if value, reply := validateSlot(s, raw); reply == "" {
+				t.Errorf("%s accepted a control character: %q -> %q", slot, raw, value)
+			}
+		}
 	}
 }
 

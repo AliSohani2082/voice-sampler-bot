@@ -28,7 +28,7 @@ Accepting takes effect immediately and is saved in the `access_requests` table, 
 - Aim for five seconds. Telegram voice notes reporting more than ten seconds are rejected. The bot does not transcribe audio or compare the two typed sentences.
 - `/my` lists submitted pairs and offers controls to replay or replace either recording, edit the pair transcript, or permanently delete a pair and both audio files.
 - `/download` exports your own submitted pairs (all, this week, or today, by Asia/Tehran dates) as WAV files in a zip, one folder per day; large exports arrive as several zips.
-- `/leader d` ranks today's top recorders by completed pairs and `/leader w` ranks the current week, which starts on Saturday in Asia/Tehran. Add `l` — `/leader w l` — for a longer board with recordings and audio minutes per person, plus your own rank. Leave the day or week out and the bot asks which you meant. Participants are shown by the name they entered in `/onboard`, so the board is visible to the whole class; admins are not ranked. Deleting a pair removes its leaderboard credit.
+- `/leader d` ranks today's top recorders by completed pairs and `/leader w` ranks the current week, which starts on Saturday in Asia/Tehran. Add `l` — `/leader w l` — for a longer board with recordings and audio minutes per person, plus your own rank. Leave the day or week out and the bot asks which you meant. Participants are shown by the name they entered in `/onboard`, so the board is visible to the whole class; admins are not ranked. A contributor from before onboarding existed appears under the first name Telegram reports, or anonymously if the bot has not seen them since — never as a numeric ID. Both fall away once they send a message or complete `/onboard`. Deleting a pair removes its leaderboard credit.
 - `/cancel` discards an unfinished pair, or abandons a half-finished questionnaire or broadcast prompt. Starting `/new` while a pair is unfinished asks for confirmation before discarding it. In-progress work survives a bot restart.
 
 ## Commands with arguments
@@ -44,6 +44,16 @@ Each user in `ADMIN_TELEGRAM_ID` (one ID or several, comma-separated) can use `/
 A user's record view in `/users` also shows their onboarding details, since that is the metadata the dataset is for.
 
 The bot stores the participant's Telegram numeric ID, the first name and username Telegram reports, the gender, age, first name, last name and student number entered in `/onboard`, and per recording the Telegram file ID and unique file ID, reported duration, downloaded byte count, MIME type, transcript, timestamps, and bucket object key. The recordings remain private in MinIO. Note that `/leader` shows participants' entered names to each other; nothing else about a profile is visible to other participants. A startup and periodic cleanup job retries failed object deletions.
+
+## Tests
+
+`go test ./...` needs no services. The tests that can only be shown against a real database — which commands leave a half-finished question behind, whether the rank a participant is told matches the board they see, and that the schema upgrades a database created before profiles existed — are skipped unless `VOICEBOT_TEST_DSN` points at a scratch PostgreSQL:
+
+```sh
+VOICEBOT_TEST_DSN='postgres://voicebot:PASSWORD@127.0.0.1:5432/scratch' go test ./cmd/voicebot
+```
+
+That database is written to, so never point it at collected data.
 
 ## Access the data
 

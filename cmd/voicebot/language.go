@@ -92,7 +92,7 @@ var fa = map[string]string{
 	unrecognizedOption: "این گزینه را نشناختم.",
 	canceled:           "لغو شد.",
 	// /onboard and /profile
-	onboardIntro:          "پیش از شروع ضبط، کلاس به چند مشخصه از شما نیاز دارد. این اطلاعات همراه صداهای شما ذخیره می‌شود و تنها برای مجموعه‌دادهٔ درس به کار می‌رود.",
+	onboardIntro:          "پیش از شروع ضبط، کلاس به چند مشخصه از شما نیاز دارد. این اطلاعات همراه صداهای شما برای مجموعه‌دادهٔ درس ذخیره می‌شود. نام و نام خانوادگی شما در جدول /leader به شرکت‌کنندگان دیگر هم نشان داده می‌شود؛ بقیهٔ اطلاعات نه.",
 	askGender:             "جنسیت شما چیست؟",
 	"Male":                "مرد",
 	"Female":              "زن",
@@ -122,7 +122,7 @@ var fa = map[string]string{
 	leaderYou:        "رتبهٔ شما %d · جفت: %d",
 	leaderYouNone:    "شما در این بازه جفت کامل‌شده‌ای ندارید.",
 	leaderAdminNote:  "مدیرها در جدول رتبه‌بندی نمی‌شوند.",
-	leaderUnnamed:    "کاربر %d",
+	leaderAnonymous:  "شرکت‌کننده",
 
 	"Your previous export is still being prepared. Please wait for it.":                "فایل قبلی شما هنوز در حال آماده‌سازی است. لطفاً صبر کنید.",
 	"I couldn't build your export. Please try again later, or choose a shorter range.": "ساخت فایل شما ممکن نشد. لطفاً بعداً دوباره تلاش کنید یا بازه کوتاه‌تری انتخاب کنید.",

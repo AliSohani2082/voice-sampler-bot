@@ -1,6 +1,10 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -281,5 +285,75 @@ func TestRegistryStringsAreTranslated(t *testing.T) {
 	}
 	for _, s := range []string{unknownCommand, unrecognizedOption, canceled, busyWithPair} {
 		check("dispatcher reply", s)
+	}
+}
+
+// Answering a slot twice (/leader d w) has to leave the user able to answer it.
+// The re-prompt's buttons must not carry the contested value, or each one
+// conflicts with it and the same question repeats forever.
+func TestRePromptDropsContestedAnswer(t *testing.T) {
+	leader := lookupCommand("leader")
+	contested, _, bad := leader.parse("d w")
+	if bad == "" {
+		t.Fatal("/leader d w should report a conflict")
+	}
+	slot := leader.firstChoiceSlot()
+	if slot < 0 {
+		t.Fatal("/leader has no choice slot to re-ask")
+	}
+	var buttons []map[string]string
+	a := &app{apiURL: "https://telegram.test/", http: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var body struct {
+			Markup struct {
+				InlineKeyboard [][]map[string]string `json:"inline_keyboard"`
+			} `json:"reply_markup"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range body.Markup.InlineKeyboard {
+			buttons = append(buttons, row...)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":true,"result":true}`)), Header: make(http.Header)}, nil
+	})}}
+	if err := a.askSlot(context.Background(), 1, leader, contested, slot, unrecognizedOption); err != nil {
+		t.Fatal(err)
+	}
+	if len(buttons) != len(leader.args[slot].options) {
+		t.Fatalf("offered %d buttons for %d options", len(buttons), len(leader.args[slot].options))
+	}
+	for _, b := range buttons {
+		data := b["callback_data"]
+		parts := strings.SplitN(data, ":", 3)
+		if len(parts) != 3 {
+			t.Fatalf("%q is not cmd:<name>:<tokens>", data)
+		}
+		answered, missing, bad := leader.parse(strings.ReplaceAll(parts[2], ".", " "))
+		if bad != "" || len(missing) != 0 {
+			t.Errorf("%q still conflicts: bad %q, missing %v", data, bad, missing)
+		}
+		if answered.get("period") == "" {
+			t.Errorf("%q answers nothing", data)
+		}
+	}
+}
+
+// awaits decides which commands can leave a collection row behind, and so which
+// have to clear one before they run. Getting it wrong let a bare /broadcast
+// followed by /broadcast text leave a row that swallowed the admin's next
+// message and broadcast it.
+func TestAwaitsCoversEveryTextCommand(t *testing.T) {
+	want := map[string]bool{"onboard": true, "profile": true, "broadcast": true, "allow": true, "unallow": true}
+	for i := range commandSpecs {
+		c := &commandSpecs[i]
+		if got := c.awaits(); got != want[c.name] {
+			t.Errorf("%s: awaits() = %v, want %v", c.name, got, want[c.name])
+		}
+		// Anything that gathers answers across messages must be in that set, or
+		// it would strand a row; the reverse does not hold, since a one-slot
+		// command never restores answers but can still have stored one.
+		if c.collects() && !c.awaits() {
+			t.Errorf("%s collects answers but awaits() is false", c.name)
+		}
 	}
 }

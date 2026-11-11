@@ -24,7 +24,7 @@ const (
 	leaderYou       = "You are #%d, with pairs: %d"
 	leaderYouNone   = "You have no completed pairs in this range yet."
 	leaderAdminNote = "Admins are not ranked."
-	leaderUnnamed   = "User %d"
+	leaderAnonymous = "A participant"
 )
 
 // leaderBounds returns the half-open [from, to) window for a leaderboard period,
@@ -45,6 +45,7 @@ func leaderBounds(kind string, now time.Time) (from, to time.Time, ok bool) {
 	return from, to, false
 }
 
+// leaderRow is one contributor's line on the board.
 type leaderRow struct {
 	Name       string
 	Pairs      int
@@ -52,10 +53,14 @@ type leaderRow struct {
 	Seconds    int
 }
 
-// leaderName labels a contributor: the name they declared when onboarding, then
-// whatever Telegram reported, then their bare id. Only contributors from before
-// onboarding existed fall past the first case, and only until their next /new.
-func leaderName(ctx context.Context, first, last, tgFirst, tgUsername string, userID int64) string {
+// leaderName labels a contributor: the name they declared when onboarding, else
+// whatever Telegram last reported. Contributors from before onboarding existed
+// fall past the first case, and those the bot has not seen since have no name
+// stored at all — they are shown anonymously rather than as a numeric id, which
+// the whole class would otherwise be able to read off the board. Both fallbacks
+// resolve themselves: the Telegram name returns on their next message and the
+// declared one once they onboard.
+func leaderName(ctx context.Context, first, last, tgFirst, tgUsername string) string {
 	if first != "" || last != "" {
 		return truncate(first+" "+last, 32)
 	}
@@ -65,7 +70,7 @@ func leaderName(ctx context.Context, first, last, tgFirst, tgUsername string, us
 	if tgUsername != "" {
 		return truncate("@"+tgUsername, 32)
 	}
-	return fmt.Sprintf(translate(ctx, leaderUnnamed), userID)
+	return translate(ctx, leaderAnonymous)
 }
 
 // leaderRows ranks contributors by completed pairs in the window. Admins are
@@ -98,7 +103,7 @@ func (a *app) leaderRows(ctx context.Context, from, to time.Time, limit int) ([]
 		if err := rows.Scan(&userID, &first, &last, &tgFirst, &tgUsername, &r.Pairs, &r.Recordings, &r.Seconds); err != nil {
 			return nil, err
 		}
-		r.Name = leaderName(ctx, first, last, tgFirst, tgUsername, userID)
+		r.Name = leaderName(ctx, first, last, tgFirst, tgUsername)
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -106,10 +111,19 @@ func (a *app) leaderRows(ctx context.Context, from, to time.Time, limit int) ([]
 
 // leaderRank is the asking user's own standing, so someone outside the listed rows
 // still sees where they are. Not found is the ordinary "nothing in this window".
+//
+// The window repeats leaderRows' ordering exactly, so the number reported here is
+// the position the board shows. rank() would instead hand tied contributors a
+// shared number and tell the one listed second that they are first; the samples
+// join is what makes the seconds tiebreak available, and forces count(DISTINCT)
+// because the join multiplies each pair's row.
 func (a *app) leaderRank(ctx context.Context, userID int64, from, to time.Time) (rank, pairs int, found bool, err error) {
 	err = a.db.QueryRow(ctx, `SELECT rank, pairs FROM (
-		  SELECT p.user_id, count(*) AS pairs, rank() OVER (ORDER BY count(*) DESC) AS rank
+		  SELECT p.user_id,
+		         count(DISTINCT p.id) AS pairs,
+		         row_number() OVER (ORDER BY count(DISTINCT p.id) DESC, coalesce(sum(s.duration_seconds),0) DESC, p.user_id) AS rank
 		  FROM pairs p
+		  LEFT JOIN samples s ON s.pair_id=p.id
 		  WHERE p.status='complete' AND p.completed_at>=$1 AND p.completed_at<$2 AND p.user_id<>ALL($3)
 		  GROUP BY p.user_id) t WHERE user_id=$4`, from, to, a.adminIDs(), userID).Scan(&rank, &pairs)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -121,6 +135,7 @@ func (a *app) leaderRank(ctx context.Context, userID int64, from, to time.Time) 
 	return rank, pairs, true, nil
 }
 
+// leaderboard renders the board for one period, short or detailed.
 func (a *app) leaderboard(ctx context.Context, userID int64, period string, detailed bool) error {
 	from, to, ok := leaderBounds(period, time.Now())
 	if !ok {

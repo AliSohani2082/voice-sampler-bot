@@ -8,6 +8,7 @@ import (
 
 const allowUsage = "Use /allow ID or /unallow ID with a positive numeric Telegram user ID."
 
+// validateUserID accepts a positive Telegram user id, in either script.
 func validateUserID(raw string) (string, string) {
 	v := normalizeDigits(strings.TrimSpace(raw))
 	id, err := strconv.ParseInt(v, 10, 64)
@@ -39,6 +40,8 @@ var idArg = argSpec{
 // cycle through this very slice.
 var commandSpecs []commandSpec
 
+// init fills the registry. See the note above commandSpecs for why it is not a
+// var initializer.
 func init() {
 	commandSpecs = []commandSpec{
 		{
