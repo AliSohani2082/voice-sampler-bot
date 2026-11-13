@@ -31,37 +31,46 @@ func newObjectKey(userID int64, pairID, kind string) string {
 	return fmt.Sprintf("%d/%s/%s/%s.ogg", userID, pairID, kind, randomID())
 }
 
-// uploadVoice downloads the voice from Telegram and stores it under key. It returns the actual size.
-func (a *app) uploadVoice(ctx context.Context, key, fileID, mimeType string) (int64, error) {
+// downloadTelegramFile fetches a voice note from Telegram by its file_id.
+func (a *app) downloadTelegramFile(ctx context.Context, fileID string) ([]byte, error) {
 	var file struct {
 		FilePath string `json:"file_path"`
 		FileSize int64  `json:"file_size"`
 	}
 	if err := a.call(ctx, "getFile", map[string]any{"file_id": fileID}, &file); err != nil {
-		return 0, err
+		return nil, err
 	}
 	if file.FilePath == "" || file.FileSize > maxVoiceBytes {
-		return 0, errors.New("Telegram file unavailable or too large")
+		return nil, errors.New("Telegram file unavailable or too large")
 	}
 	url := "https://api.telegram.org/file/bot" + a.cfg.token + "/" + file.FilePath
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	resp, err := a.http.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("Telegram file request failed: %s", strings.ReplaceAll(err.Error(), a.cfg.token, "[redacted]"))
+		return nil, fmt.Errorf("Telegram file request failed: %s", strings.ReplaceAll(err.Error(), a.cfg.token, "[redacted]"))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("Telegram file download status %d", resp.StatusCode)
+		return nil, fmt.Errorf("Telegram file download status %d", resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxVoiceBytes+1))
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if len(data) > maxVoiceBytes {
-		return 0, errors.New("voice exceeds download limit")
+		return nil, errors.New("voice exceeds download limit")
+	}
+	return data, nil
+}
+
+// uploadVoice downloads the voice from Telegram and stores it under key. It returns the actual size.
+func (a *app) uploadVoice(ctx context.Context, key, fileID, mimeType string) (int64, error) {
+	data, err := a.downloadTelegramFile(ctx, fileID)
+	if err != nil {
+		return 0, err
 	}
 	if mimeType == "" {
 		mimeType = "audio/ogg"

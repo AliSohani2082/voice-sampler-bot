@@ -58,9 +58,11 @@ func exportBounds(kind string, now time.Time) (from, to time.Time, ok bool) {
 }
 
 type exportItem struct {
-	Key  string // S3 object key
-	Path string // path inside the zip: YYYY-MM-DD/HHMMSS_<pair>/<Sleepy|fresh>-<student number>.wav
-	At   time.Time
+	Key    string // S3 object key
+	FileID string // Telegram file_id, used while the background upload is still pending
+	Stored bool   // false until the upload worker has copied the audio to object storage
+	Path   string // path inside the zip: YYYY-MM-DD/HHMMSS_<pair>/<Sleepy|fresh>-<student number>.wav
+	At     time.Time
 }
 
 // exportPath names a recording as the course requires: Sleepy-SID.wav or fresh-SID.wav (SID is the student
@@ -153,22 +155,30 @@ func oggToWAV(ctx context.Context, ogg []byte) ([]byte, error) {
 	return wav, fixWAVSizes(wav)
 }
 
-func (a *app) fetchWAV(ctx context.Context, key string) ([]byte, error) {
-	obj, err := a.s3.GetObject(ctx, a.cfg.bucket, key, minio.GetObjectOptions{})
+func (a *app) fetchWAV(ctx context.Context, it exportItem) ([]byte, error) {
+	if !it.Stored {
+		// Not in object storage yet: take it straight from Telegram instead of failing the export.
+		ogg, err := a.downloadTelegramFile(ctx, it.FileID)
+		if err != nil {
+			return nil, fmt.Errorf("pending %s: %w", it.Key, err)
+		}
+		return oggToWAV(ctx, ogg)
+	}
+	obj, err := a.s3.GetObject(ctx, a.cfg.bucket, it.Key, minio.GetObjectOptions{})
 	if err != nil {
 		return nil, err
 	}
 	defer obj.Close()
 	ogg, err := io.ReadAll(io.LimitReader(obj, maxVoiceBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", key, err)
+		return nil, fmt.Errorf("read %s: %w", it.Key, err)
 	}
 	return oggToWAV(ctx, ogg)
 }
 
 // exportItems always filters by the caller's own user_id; callback data never carries IDs.
 func (a *app) exportItems(ctx context.Context, userID int64, from, to time.Time) ([]exportItem, error) {
-	rows, err := a.db.Query(ctx, `SELECT p.completed_at,p.id,s.kind,s.object_key,pr.student_number FROM pairs p JOIN samples s ON s.pair_id=p.id JOIN profiles pr ON pr.user_id=p.user_id WHERE p.user_id=$1 AND p.status='complete' AND p.completed_at>=$2 AND p.completed_at<$3 ORDER BY p.completed_at,p.id,s.kind`, userID, from, to)
+	rows, err := a.db.Query(ctx, `SELECT p.completed_at,p.id,s.kind,s.object_key,s.telegram_file_id,s.stored,pr.student_number FROM pairs p JOIN samples s ON s.pair_id=p.id JOIN profiles pr ON pr.user_id=p.user_id WHERE p.user_id=$1 AND p.status='complete' AND p.completed_at>=$2 AND p.completed_at<$3 ORDER BY p.completed_at,p.id,s.kind`, userID, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -176,11 +186,12 @@ func (a *app) exportItems(ctx context.Context, userID int64, from, to time.Time)
 	var items []exportItem
 	for rows.Next() {
 		var at time.Time
-		var id, kind, key, student string
-		if err := rows.Scan(&at, &id, &kind, &key, &student); err != nil {
+		var id, kind, key, fileID, student string
+		var stored bool
+		if err := rows.Scan(&at, &id, &kind, &key, &fileID, &stored, &student); err != nil {
 			return nil, err
 		}
-		items = append(items, exportItem{Key: key, Path: exportPath(at, id, kind, student), At: at})
+		items = append(items, exportItem{Key: key, FileID: fileID, Stored: stored, Path: exportPath(at, id, kind, student), At: at})
 	}
 	return items, rows.Err()
 }
@@ -218,7 +229,11 @@ func (a *app) export(ctx context.Context, userID int64, kind string) error {
 	if err := a.send(ctx, userID, "Preparing your file… this can take a minute.", nil); err != nil {
 		return err
 	}
-	return buildZips(items, zipPartLimit, func(key string) ([]byte, error) { return a.fetchWAV(ctx, key) }, func(data []byte, part int, last bool) error {
+	byKey := make(map[string]exportItem, len(items))
+	for _, it := range items {
+		byKey[it.Key] = it
+	}
+	return buildZips(items, zipPartLimit, func(key string) ([]byte, error) { return a.fetchWAV(ctx, byKey[key]) }, func(data []byte, part int, last bool) error {
 		if part == 1 && !last {
 			_ = a.send(ctx, userID, "Your export is large, so it will arrive as several zip files.", nil)
 		}
