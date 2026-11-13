@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -15,6 +16,7 @@ type session struct {
 	PairID    string
 	Candidate *voice
 	Nonce     string
+	Pending   []byte // await: stages only, the answers a command has gathered so far
 }
 
 type sample struct {
@@ -114,11 +116,25 @@ ALTER TABLE samples ADD COLUMN IF NOT EXISTS stored boolean NOT NULL DEFAULT tru
 CREATE TABLE IF NOT EXISTS bot_state (
   id integer PRIMARY KEY CHECK (id=1),
   offset_value bigint NOT NULL
-);`
+);
+CREATE TABLE IF NOT EXISTS profiles (
+  user_id bigint PRIMARY KEY,
+  gender text NOT NULL CHECK (gender IN ('male','female')),
+  age integer NOT NULL CHECK (age BETWEEN 10 AND 100),
+  first_name text NOT NULL CHECK (first_name <> ''),
+  last_name text NOT NULL CHECK (last_name <> ''),
+  student_number text NOT NULL CHECK (student_number <> ''),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS profiles_student_number_idx ON profiles(student_number);
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pending jsonb;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS tg_first_name text NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS tg_username text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS pairs_completed_idx ON pairs(completed_at) WHERE status='complete';`
 
 func (a *app) loadAllowlist(ctx context.Context) error {
 	for id := range a.cfg.allowed {
-		if id == a.cfg.adminID {
+		if a.cfg.fullAdmins[id] {
 			continue
 		}
 		if _, err := a.db.Exec(ctx, `INSERT INTO allowlist(user_id,allowed) VALUES($1,true) ON CONFLICT DO NOTHING`, id); err != nil {
@@ -141,8 +157,8 @@ func (a *app) loadAllowlist(ctx context.Context) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if a.cfg.adminID != 0 {
-		a.cfg.allowed[a.cfg.adminID] = true
+	for id := range a.cfg.fullAdmins {
+		a.cfg.allowed[id] = true
 	}
 	return nil
 }
@@ -161,10 +177,29 @@ func (a *app) setLanguage(ctx context.Context, userID int64, language string) er
 	return err
 }
 
+// truncate trims s and caps it at n runes, so a very long Telegram name or
+// profile answer cannot stretch a leaderboard row or a profile card.
+func truncate(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
+}
+
+// upsertUser records the user and refreshes the name Telegram reports. These are
+// only a fallback for display: the name a participant declares in /onboard lives
+// in profiles and is preferred everywhere.
+func (a *app) upsertUser(ctx context.Context, u tgUser) error {
+	_, err := a.db.Exec(ctx, `INSERT INTO users(user_id,tg_first_name,tg_username) VALUES($1,$2,$3) ON CONFLICT(user_id) DO UPDATE SET tg_first_name=excluded.tg_first_name,tg_username=excluded.tg_username`,
+		u.ID, truncate(u.FirstName, 64), truncate(u.Username, 64))
+	return err
+}
+
 func (a *app) getSession(ctx context.Context, userID int64) (session, error) {
 	var s session
 	var candidate []byte
-	err := a.db.QueryRow(ctx, `SELECT stage,pair_id,candidate,nonce FROM sessions WHERE user_id=$1`, userID).Scan(&s.Stage, &s.PairID, &candidate, &s.Nonce)
+	err := a.db.QueryRow(ctx, `SELECT stage,pair_id,candidate,nonce,pending FROM sessions WHERE user_id=$1`, userID).Scan(&s.Stage, &s.PairID, &candidate, &s.Nonce, &s.Pending)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return session{}, nil
 	}
@@ -188,7 +223,11 @@ func (a *app) putSession(ctx context.Context, userID int64, s session) error {
 		}
 		candidate = data
 	}
-	_, err := a.db.Exec(ctx, `INSERT INTO sessions(user_id,stage,pair_id,candidate,nonce) VALUES($1,$2,$3,$4,$5) ON CONFLICT(user_id) DO UPDATE SET stage=$2,pair_id=$3,candidate=$4,nonce=$5`, userID, s.Stage, s.PairID, candidate, s.Nonce)
+	var pending any
+	if len(s.Pending) > 0 {
+		pending = s.Pending
+	}
+	_, err := a.db.Exec(ctx, `INSERT INTO sessions(user_id,stage,pair_id,candidate,nonce,pending) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(user_id) DO UPDATE SET stage=$2,pair_id=$3,candidate=$4,nonce=$5,pending=$6`, userID, s.Stage, s.PairID, candidate, s.Nonce, pending)
 	return err
 }
 

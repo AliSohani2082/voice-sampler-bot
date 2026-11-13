@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,18 +24,18 @@ import (
 type config struct {
 	token, bucket string
 	allowed       map[int64]bool
-	adminID       int64
-	admins        map[int64]bool // may approve access requests; defaults to allowed
+	fullAdmins    map[int64]bool // ADMIN_TELEGRAM_ID: every admin command; always allowed
+	admins        map[int64]bool // may approve access requests; defaults to allowed, always includes fullAdmins
 }
 
 type app struct {
-	cfg              config
-	db               *pgxpool.Pool
-	s3               *minio.Client
-	http             *http.Client
-	apiURL           string
-	broadcastPending bool
-	uploadKick       chan struct{}
+	cfg        config
+	db         *pgxpool.Pool
+	s3         *minio.Client
+	http       *http.Client
+	apiURL     string
+	exporting  sync.Map // user IDs with a /download export running
+	uploadKick chan struct{}
 }
 
 func main() {
@@ -95,13 +96,11 @@ func loadConfig() (config, error) {
 	if c.allowed, err = parseIDs("ALLOWED_USER_IDS"); err != nil {
 		return c, err
 	}
-	if raw := strings.TrimSpace(os.Getenv("ADMIN_TELEGRAM_ID")); raw != "" {
-		id, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || id <= 0 {
-			return c, errors.New("ADMIN_TELEGRAM_ID must be a positive Telegram numeric user ID")
-		}
-		c.adminID = id
-		c.allowed[c.adminID] = true
+	if c.fullAdmins, err = parseIDs("ADMIN_TELEGRAM_ID"); err != nil {
+		return c, err
+	}
+	for id := range c.fullAdmins {
+		c.allowed[id] = true
 	}
 	if len(c.allowed) == 0 {
 		return c, errors.New("ALLOWED_USER_IDS or ADMIN_TELEGRAM_ID must contain a Telegram numeric user ID")
@@ -111,6 +110,9 @@ func loadConfig() (config, error) {
 	}
 	if len(c.admins) == 0 {
 		c.admins = c.allowed
+	}
+	for id := range c.fullAdmins {
+		c.admins[id] = true
 	}
 	return c, nil
 }

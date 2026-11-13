@@ -16,16 +16,6 @@ const (
 // pairLinkPrefixLen hex characters of a pair ID fit in a tappable /p_<prefix> command.
 const pairLinkPrefixLen = 12
 
-// isStatusLong reports whether the /status arguments ask for the long form ("l" or "long").
-func isStatusLong(text string) bool {
-	f := strings.Fields(text)
-	if len(f) < 2 {
-		return false
-	}
-	arg := strings.ToLower(f[1])
-	return arg == "l" || arg == "long"
-}
-
 func (a *app) status(ctx context.Context, userID int64, long bool) error {
 	if long {
 		return a.statusLong(ctx, userID)
