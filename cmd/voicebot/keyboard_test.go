@@ -3,7 +3,7 @@ package main
 import "testing"
 
 func TestKeyboardCommand(t *testing.T) {
-	for text, want := range map[string]string{"Record a pair": "new", "وضعیت من": "status", "Leaderboard": "leader", "دریافت صداهای من": "download", "My profile": "profile", "جفت‌های من": "my"} {
+	for text, want := range map[string]string{"🎙 New pair": "new", "📊 وضعیت": "status", "🏆 Leader": "leader", "📥 دریافت": "download", "👤 Profile": "profile", "📂 جفت‌های من": "my"} {
 		if got, ok := keyboardCommand(text); !ok || got != want {
 			t.Errorf("keyboardCommand(%q) = %q, %v; want %q", text, got, ok, want)
 		}

@@ -6,9 +6,8 @@ import "context"
 // Each label sends itself as a plain message, which keyboardCommand maps back to
 // the command it stands for.
 var keyboardButtons = [][]struct{ label, command string }{
-	{{"Record a pair", "new"}, {"My status", "status"}},
-	{{"My pairs", "my"}, {"Leaderboard", "leader"}},
-	{{"Download my voices", "download"}, {"My profile", "profile"}},
+	{{"🎙 New pair", "new"}, {"📊 Status", "status"}, {"📂 My pairs", "my"}},
+	{{"🏆 Leader", "leader"}, {"📥 Download", "download"}, {"👤 Profile", "profile"}},
 }
 
 // keyboardCommand returns the command for a reply-keyboard label, in either language.
