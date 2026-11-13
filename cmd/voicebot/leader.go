@@ -10,6 +10,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// leaderChunk keeps each message well under Telegram's 4096-character limit (len counts bytes, which is conservative).
+const leaderChunk = 3500
+
 const (
 	askPeriod        = "Leaderboard for which period?"
 	leaderToday      = "Top recorders today:"
@@ -74,7 +77,7 @@ func leaderName(ctx context.Context, first, last, tgFirst, tgUsername string) st
 }
 
 // leaderRows ranks contributors by completed pairs in the window. Admins are
-// excluded, as they are from /stats and /users.
+// excluded, as they are from /stats and /users. A limit of 0 returns every contributor.
 func (a *app) leaderRows(ctx context.Context, from, to time.Time, limit int) ([]leaderRow, error) {
 	rows, err := a.db.Query(ctx, `SELECT p.user_id,
 		  coalesce(pr.first_name,'') AS first_name,
@@ -90,7 +93,7 @@ func (a *app) leaderRows(ctx context.Context, from, to time.Time, limit int) ([]
 		WHERE p.status='complete' AND p.completed_at>=$1 AND p.completed_at<$2 AND p.user_id<>ALL($3)
 		GROUP BY p.user_id, pr.first_name, pr.last_name, u.tg_first_name, u.tg_username
 		ORDER BY pairs DESC, seconds DESC, p.user_id
-		LIMIT $4`, from, to, a.adminIDs(), limit)
+		LIMIT nullif($4,0)`, from, to, a.adminIDs(), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -141,11 +144,7 @@ func (a *app) leaderboard(ctx context.Context, userID int64, period string, deta
 	if !ok {
 		return a.send(ctx, userID, unrecognizedOption, nil)
 	}
-	limit := 5
-	if detailed {
-		limit = 10
-	}
-	rows, err := a.leaderRows(ctx, from, to, limit)
+	rows, err := a.leaderRows(ctx, from, to, 0) // everyone who submitted in the period
 	if err != nil {
 		return err
 	}
@@ -155,24 +154,34 @@ func (a *app) leaderboard(ctx context.Context, userID int64, period string, deta
 		}
 		return a.send(ctx, userID, leaderEmptyWeek, nil)
 	}
-	var b strings.Builder
+	var head strings.Builder
 	if period == "d" {
-		b.WriteString(translate(ctx, leaderToday))
+		head.WriteString(translate(ctx, leaderToday))
 	} else {
-		b.WriteString(translate(ctx, leaderWeek))
+		head.WriteString(translate(ctx, leaderWeek))
 	}
 	// A day needs no range line: its header already says "today".
 	if detailed && period == "w" {
-		b.WriteString("\n" + fmt.Sprintf(translate(ctx, leaderRangeLine),
+		head.WriteString("\n" + fmt.Sprintf(translate(ctx, leaderRangeLine),
 			from.Format("2006-01-02"), to.AddDate(0, 0, -1).Format("2006-01-02")))
 	}
+	// Everyone is listed, so the board can pass Telegram's message limit; split it into several messages.
+	chunks := []string{}
+	b := &head
 	for i, r := range rows {
-		b.WriteString("\n")
+		var line string
 		if detailed {
-			b.WriteString(fmt.Sprintf(translate(ctx, leaderRowLong), i+1, r.Name, r.Pairs, r.Recordings, float64(r.Seconds)/60))
+			line = fmt.Sprintf(translate(ctx, leaderRowLong), i+1, r.Name, r.Pairs, r.Recordings, float64(r.Seconds)/60)
 		} else {
-			b.WriteString(fmt.Sprintf(translate(ctx, leaderRowShort), i+1, r.Name, r.Pairs))
+			line = fmt.Sprintf(translate(ctx, leaderRowShort), i+1, r.Name, r.Pairs)
 		}
+		if b.Len()+len(line)+1 > leaderChunk {
+			chunks = append(chunks, b.String())
+			b = &strings.Builder{}
+		} else if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(line)
 	}
 	if detailed {
 		if a.cfg.fullAdmins[userID] {
@@ -189,5 +198,11 @@ func (a *app) leaderboard(ctx context.Context, userID int64, period string, deta
 			}
 		}
 	}
-	return a.send(ctx, userID, b.String(), nil)
+	chunks = append(chunks, b.String())
+	for _, c := range chunks {
+		if err := a.send(ctx, userID, c, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }

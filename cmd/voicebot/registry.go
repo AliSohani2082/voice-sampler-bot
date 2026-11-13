@@ -80,6 +80,14 @@ func init() {
 			},
 		},
 		{
+			name:        "status",
+			description: "My submitted voices / وضعیت من",
+			args:        []argSpec{{name: "long", kind: argFlag, token: "l"}},
+			run: func(a *app, ctx context.Context, userID int64, p cmdArgs) error {
+				return a.status(ctx, userID, p.has("long"))
+			},
+		},
+		{
 			name:        "onboard",
 			description: "Set up my details / ثبت اطلاعات من",
 			args:        profileFields(),

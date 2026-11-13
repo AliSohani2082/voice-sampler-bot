@@ -29,12 +29,13 @@ type config struct {
 }
 
 type app struct {
-	cfg       config
-	db        *pgxpool.Pool
-	s3        *minio.Client
-	http      *http.Client
-	apiURL    string
-	exporting sync.Map // user IDs with a /download export running
+	cfg        config
+	db         *pgxpool.Pool
+	s3         *minio.Client
+	http       *http.Client
+	apiURL     string
+	exporting  sync.Map // user IDs with a /download export running
+	uploadKick chan struct{}
 }
 
 func main() {
@@ -49,7 +50,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
-	a := &app{cfg: cfg, db: db, http: &http.Client{Timeout: 75 * time.Second}, apiURL: "https://api.telegram.org/bot" + cfg.token + "/"}
+	a := &app{cfg: cfg, db: db, http: &http.Client{Timeout: 75 * time.Second}, apiURL: "https://api.telegram.org/bot" + cfg.token + "/", uploadKick: make(chan struct{}, 1)}
 	if err := retry(ctx, func() error { return db.Ping(ctx) }); err != nil {
 		log.Fatal(err)
 	}
@@ -81,6 +82,7 @@ func main() {
 	if err := a.registerMenu(ctx); err != nil {
 		log.Fatal(err)
 	}
+	go a.uploadWorker(ctx)
 	log.Print("bot started")
 	a.poll(ctx)
 }

@@ -125,7 +125,7 @@ func TestCommandSpecsWellFormed(t *testing.T) {
 // the registry, so adding a command is a deliberate edit here rather than a
 // surprise in the menu.
 func TestMenuCommands(t *testing.T) {
-	public := []string{"start", "new", "my", "onboard", "profile", "leader", "help", "cancel", "download"}
+	public := []string{"start", "new", "my", "status", "onboard", "profile", "leader", "help", "cancel", "download"}
 	adminOnly := []string{"stats", "users", "broadcast", "allow", "unallow"}
 
 	names := func(menu []map[string]string) []string {
