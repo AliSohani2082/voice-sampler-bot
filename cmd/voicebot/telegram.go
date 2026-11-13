@@ -111,6 +111,7 @@ func (a *app) registerMenu(ctx context.Context) error {
 		{"command": "start", "description": "Choose language / انتخاب زبان"},
 		{"command": "new", "description": "Record a pair / ضبط جفت صدا"},
 		{"command": "my", "description": "View my pairs / دیدن جفت‌ها"},
+		{"command": "status", "description": "My submitted voices / وضعیت من"},
 		{"command": "help", "description": "How it works / راهنما"},
 		{"command": "cancel", "description": "Cancel current pair / لغو جفت فعلی"},
 	}

@@ -60,9 +60,14 @@ func (a *app) handleMessage(ctx context.Context, m *message) error {
 			return a.startPair(ctx, userID, false)
 		case "/my":
 			return a.listPairs(ctx, userID, 0)
+		case "/status":
+			return a.status(ctx, userID, isStatusLong(m.Text))
 		case "/cancel":
 			return a.cancel(ctx, userID)
 		default:
+			if strings.HasPrefix(command, "/p_") {
+				return a.showPairByLink(ctx, userID, command)
+			}
 			return a.send(ctx, userID, "Choose an option below or open the Menu for commands.", actionButtons())
 		}
 	}
