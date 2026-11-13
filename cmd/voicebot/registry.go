@@ -58,7 +58,7 @@ func init() {
 					return err
 				}
 				ctx = withLanguage(ctx, language)
-				if err := a.send(ctx, userID, welcome, actionButtons()); err != nil {
+				if err := a.sendWithKeyboard(ctx, userID, welcome); err != nil {
 					return err
 				}
 				return a.onboardIfNew(ctx, userID)
@@ -120,7 +120,7 @@ func init() {
 			name:        "help",
 			description: "How it works / راهنما",
 			run: func(a *app, ctx context.Context, userID int64, _ cmdArgs) error {
-				return a.send(ctx, userID, helpText(ctx), actionButtons())
+				return a.sendWithKeyboard(ctx, userID, helpText(ctx))
 			},
 		},
 		{

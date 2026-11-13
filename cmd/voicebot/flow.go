@@ -17,6 +17,9 @@ func actionButtons() [][]map[string]string {
 
 func (a *app) handleMessage(ctx context.Context, m *message) error {
 	userID := m.From.ID
+	if name, ok := keyboardCommand(strings.TrimSpace(m.Text)); ok {
+		return a.runCommand(ctx, userID, name, "")
+	}
 	if strings.HasPrefix(m.Text, "/") {
 		// Everything after the command word is the argument text; the registry
 		// decides what it means. strings.Cut also makes a bare "/" harmless.
@@ -95,7 +98,7 @@ func (a *app) handleMessage(ctx context.Context, m *message) error {
 		if err := a.clearSession(ctx, userID); err != nil {
 			return err
 		}
-		return a.send(ctx, userID, "Pair saved. Record another pair or view your pairs below.", actionButtons())
+		return a.sendWithKeyboard(ctx, userID, "Pair saved. Record another pair or view your pairs below.")
 	}
 	return a.send(ctx, userID, "Use the Submit or Record a new one button under your last recording.", nil)
 }
@@ -329,7 +332,7 @@ func (a *app) cancel(ctx context.Context, userID int64) error {
 	if err := a.clearSession(ctx, userID); err != nil {
 		return err
 	}
-	return a.send(ctx, userID, "Stopped. Choose what to do next.", actionButtons())
+	return a.sendWithKeyboard(ctx, userID, "Stopped. Choose what to do next.")
 }
 
 func (a *app) listPairs(ctx context.Context, userID int64, page int) error {
