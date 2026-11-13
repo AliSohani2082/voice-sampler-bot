@@ -301,6 +301,6 @@ func saveProfileWith(name string) func(*app, context.Context, int64, cmdArgs) er
 		if p.has("edit") {
 			return a.showProfile(ctx, userID, stored)
 		}
-		return a.send(ctx, userID, profileSaved, actionButtons())
+		return a.sendWithKeyboard(ctx, userID, profileSaved)
 	}
 }
