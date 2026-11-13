@@ -94,9 +94,15 @@ func (a *app) kickUploads() {
 }
 
 func (a *app) drainUploads(ctx context.Context) {
-	type job struct{ pairID, kind, key, fileID, mime string }
+	type job struct {
+		pairID, kind, key, fileID, mime string
+		at                              time.Time
+	}
+	// Each pass walks the whole pending set once with a keyset cursor, so a batch
+	// of permanently failing samples cannot hide the ones queued behind it.
+	var after job
 	for ctx.Err() == nil {
-		rows, err := a.db.Query(ctx, `SELECT s.pair_id,s.kind,s.object_key,s.telegram_file_id,s.mime_type FROM samples s JOIN pairs p ON p.id=s.pair_id WHERE NOT s.stored AND p.status IN ('draft','complete') ORDER BY s.uploaded_at LIMIT 20`)
+		rows, err := a.db.Query(ctx, `SELECT s.pair_id,s.kind,s.object_key,s.telegram_file_id,s.mime_type,s.uploaded_at FROM samples s JOIN pairs p ON p.id=s.pair_id WHERE NOT s.stored AND p.status IN ('draft','complete') AND (s.uploaded_at,s.pair_id,s.kind) > ($1,$2,$3) ORDER BY s.uploaded_at,s.pair_id,s.kind LIMIT 20`, after.at, after.pairID, after.kind)
 		if err != nil {
 			log.Printf("upload queue: %v", err)
 			return
@@ -104,7 +110,7 @@ func (a *app) drainUploads(ctx context.Context) {
 		var jobs []job
 		for rows.Next() {
 			var j job
-			if err := rows.Scan(&j.pairID, &j.kind, &j.key, &j.fileID, &j.mime); err != nil {
+			if err := rows.Scan(&j.pairID, &j.kind, &j.key, &j.fileID, &j.mime, &j.at); err != nil {
 				log.Printf("upload queue: %v", err)
 				break
 			}
@@ -114,7 +120,7 @@ func (a *app) drainUploads(ctx context.Context) {
 		if len(jobs) == 0 {
 			return
 		}
-		done := 0
+		after = jobs[len(jobs)-1]
 		for _, j := range jobs {
 			uctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 			size, err := a.uploadVoice(uctx, j.key, j.fileID, j.mime)
@@ -125,13 +131,15 @@ func (a *app) drainUploads(ctx context.Context) {
 			}
 			// Only mark stored if the sample still points at this key (it may have been replaced or deleted meanwhile).
 			cmd, err := a.db.Exec(ctx, `UPDATE samples s SET stored=true,file_size_bytes=$4 FROM pairs p WHERE s.pair_id=p.id AND s.pair_id=$1 AND s.kind=$2 AND s.object_key=$3 AND p.status IN ('draft','complete')`, j.pairID, j.kind, j.key, size)
+			if err == nil && cmd.RowsAffected() == 0 {
+				// Record the orphan first so processDeletions retries it if the removal below fails.
+				if _, err := a.db.Exec(ctx, `INSERT INTO object_deletions(object_key) VALUES($1) ON CONFLICT DO NOTHING`, j.key); err != nil {
+					log.Printf("queue orphan %s: %v", j.key, err)
+				}
+			}
 			if err != nil || cmd.RowsAffected() == 0 {
 				_ = a.s3.RemoveObject(ctx, a.cfg.bucket, j.key, minio.RemoveObjectOptions{})
 			}
-			done++
-		}
-		if done == 0 {
-			return // everything failed; retry on the next tick instead of spinning
 		}
 	}
 }
