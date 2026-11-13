@@ -34,6 +34,7 @@ type app struct {
 	http             *http.Client
 	apiURL           string
 	broadcastPending bool
+	uploadKick       chan struct{}
 }
 
 func main() {
@@ -48,7 +49,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
-	a := &app{cfg: cfg, db: db, http: &http.Client{Timeout: 75 * time.Second}, apiURL: "https://api.telegram.org/bot" + cfg.token + "/"}
+	a := &app{cfg: cfg, db: db, http: &http.Client{Timeout: 75 * time.Second}, apiURL: "https://api.telegram.org/bot" + cfg.token + "/", uploadKick: make(chan struct{}, 1)}
 	if err := retry(ctx, func() error { return db.Ping(ctx) }); err != nil {
 		log.Fatal(err)
 	}
@@ -80,6 +81,7 @@ func main() {
 	if err := a.registerMenu(ctx); err != nil {
 		log.Fatal(err)
 	}
+	go a.uploadWorker(ctx)
 	log.Print("bot started")
 	a.poll(ctx)
 }

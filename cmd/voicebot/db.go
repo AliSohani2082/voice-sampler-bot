@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS access_requests (
   created_at timestamptz NOT NULL DEFAULT now(),
   decided_at timestamptz
 );
+ALTER TABLE samples ADD COLUMN IF NOT EXISTS stored boolean NOT NULL DEFAULT true;
 CREATE TABLE IF NOT EXISTS bot_state (
   id integer PRIMARY KEY CHECK (id=1),
   offset_value bigint NOT NULL
@@ -214,7 +215,7 @@ func (a *app) saveVoice(ctx context.Context, userID int64, pairID, kind, key str
 	if !exists {
 		return errors.New("pair unavailable")
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO samples(pair_id,kind,object_key,telegram_file_id,telegram_unique_id,duration_seconds,file_size_bytes,mime_type) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(pair_id,kind) DO UPDATE SET object_key=$3,telegram_file_id=$4,telegram_unique_id=$5,duration_seconds=$6,file_size_bytes=$7,mime_type=$8,uploaded_at=now()`, pairID, kind, key, v.FileID, v.FileUniqueID, v.Duration, v.FileSize, v.MimeType)
+	_, err = tx.Exec(ctx, `INSERT INTO samples(pair_id,kind,object_key,telegram_file_id,telegram_unique_id,duration_seconds,file_size_bytes,mime_type,stored) VALUES($1,$2,$3,$4,$5,$6,$7,$8,false) ON CONFLICT(pair_id,kind) DO UPDATE SET stored=false,object_key=$3,telegram_file_id=$4,telegram_unique_id=$5,duration_seconds=$6,file_size_bytes=$7,mime_type=$8,uploaded_at=now()`, pairID, kind, key, v.FileID, v.FileUniqueID, v.Duration, v.FileSize, v.MimeType)
 	if err != nil {
 		return err
 	}

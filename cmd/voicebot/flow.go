@@ -7,8 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/minio/minio-go/v7"
 )
 
 const welcome = "Hi! 👋 This bot helps collect voice samples for Professor Zahedi's (زاهدی) Statistical Machine Learning class. Each student is asked to record 20 pairs: one sleepy and one awake voice note per pair, about 5 seconds each. At the end of the semester, these recordings will form a dataset for a machine learning project. Say the same sentence in both notes and type it once for the pair. Notes over 10 seconds are rejected. Your audio and text stay stored until you delete a pair. Created by @AliSohani2082. Choose an option below or open the Menu beside the message field."
@@ -196,18 +194,14 @@ func (a *app) handleCallback(ctx context.Context, userID int64, data string) err
 			}
 			return a.send(ctx, userID, fmt.Sprintf(translate(ctx, "Send a new %s voice note. Aim for 5 seconds."), translateKind(ctx, kind)), nil)
 		}
-		key, actualSize, err := a.storeVoice(ctx, userID, s.PairID, kind, s.Candidate)
-		if err != nil {
-			return err
-		}
-		s.Candidate.FileSize = actualSize
+		key := newObjectKey(userID, s.PairID, kind)
 		if s.Candidate.MimeType == "" {
 			s.Candidate.MimeType = "audio/ogg"
 		}
 		if err := a.saveVoice(ctx, userID, s.PairID, kind, key, s.Candidate); err != nil {
-			_ = a.s3.RemoveObject(ctx, a.cfg.bucket, key, minio.RemoveObjectOptions{})
 			return err
 		}
+		a.kickUploads() // audio is copied to storage in the background
 		s.Candidate, s.Nonce = nil, ""
 		if editing {
 			if err := a.clearSession(ctx, userID); err != nil {
