@@ -139,7 +139,8 @@ var fa = map[string]string{
 
 	"Your previous export is still being prepared. Please wait for it.":                "فایل قبلی شما هنوز در حال آماده‌سازی است. لطفاً صبر کنید.",
 	"I couldn't build your export. Please try again later, or choose a shorter range.": "ساخت فایل شما ممکن نشد. لطفاً بعداً دوباره تلاش کنید یا بازه کوتاه‌تری انتخاب کنید.",
-	"You have no submitted recordings in that range.":                                  "در این بازه صدای ثبت‌شده‌ای ندارید.",
-	"Preparing your file… this can take a minute.":                                     "در حال آماده‌سازی فایل شما… ممکن است یک دقیقه طول بکشد.",
-	"Your export is large, so it will arrive as several zip files.":                    "حجم فایل زیاد است، بنابراین در چند فایل زیپ ارسال می‌شود.",
+	skippedNote: "%d صدا هنوز در حال ذخیره شدن است و در این فایل نیامده. چند دقیقه دیگر دوباره /download را بزنید تا آن‌ها هم بیایند.",
+	"You have no submitted recordings in that range.":               "در این بازه صدای ثبت‌شده‌ای ندارید.",
+	"Preparing your file… this can take a minute.":                  "در حال آماده‌سازی فایل شما… ممکن است یک دقیقه طول بکشد.",
+	"Your export is large, so it will arrive as several zip files.": "حجم فایل زیاد است، بنابراین در چند فایل زیپ ارسال می‌شود.",
 }
