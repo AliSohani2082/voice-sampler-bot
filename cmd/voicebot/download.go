@@ -26,6 +26,13 @@ const exportTZ = "Asia/Tehran"
 // zipPartLimit stays under Telegram's 50 MB bot upload limit, leaving room for zip overhead.
 const zipPartLimit = 45 << 20
 
+// pendingFetchTimeout bounds each Telegram download of a recording the upload worker has not stored yet.
+// Telegram's getFile can stall for minutes while sendMessage still works; one slow file must not hold up the export.
+const pendingFetchTimeout = 20 * time.Second
+
+// errSkipItem tells buildZips to leave a recording out of the zip instead of failing the export.
+var errSkipItem = errors.New("skip export item")
+
 const downloadHelp = "Use /download to export your own recordings as WAV files in a zip."
 
 var exportLoc = func() *time.Location {
@@ -109,6 +116,9 @@ func buildZips(items []exportItem, limit int, convert func(key string) ([]byte, 
 	}
 	for _, it := range items {
 		wav, err := convert(it.Key)
+		if errors.Is(err, errSkipItem) {
+			continue
+		}
 		if err != nil {
 			return err
 		}
@@ -160,10 +170,14 @@ func oggToWAV(ctx context.Context, ogg []byte) ([]byte, error) {
 
 func (a *app) fetchWAV(ctx context.Context, it exportItem) ([]byte, error) {
 	if !it.Stored {
-		// Not in object storage yet: take it straight from Telegram instead of failing the export.
-		ogg, err := a.downloadTelegramFile(ctx, it.FileID)
+		// Not in object storage yet: take it straight from Telegram. If Telegram is slow too, leave this one
+		// out (the caller reports it) rather than failing every other recording in the export.
+		fctx, cancel := context.WithTimeout(ctx, pendingFetchTimeout)
+		ogg, err := a.downloadTelegramFile(fctx, it.FileID)
+		cancel()
 		if err != nil {
-			return nil, fmt.Errorf("pending %s: %w", it.Key, err)
+			log.Printf("export: pending %s: %v", it.Key, err)
+			return nil, errSkipItem
 		}
 		return oggToWAV(ctx, ogg)
 	}
@@ -236,13 +250,27 @@ func (a *app) export(ctx context.Context, userID int64, kind string) error {
 	for _, it := range items {
 		byKey[it.Key] = it
 	}
-	return buildZips(items, zipPartLimit, func(key string) ([]byte, error) { return a.fetchWAV(ctx, byKey[key]) }, func(data []byte, part int, last bool) error {
+	skipped := 0
+	convert := func(key string) ([]byte, error) {
+		wav, err := a.fetchWAV(ctx, byKey[key])
+		if errors.Is(err, errSkipItem) {
+			skipped++
+		}
+		return wav, err
+	}
+	err = buildZips(items, zipPartLimit, convert, func(data []byte, part int, last bool) error {
 		if part == 1 && !last {
 			_ = a.send(ctx, userID, "Your export is large, so it will arrive as several zip files.", nil)
 		}
 		return a.sendDocument(ctx, userID, exportFilename(kind, now, part, last), data)
 	})
+	if err != nil || skipped == 0 {
+		return err
+	}
+	return a.send(ctx, userID, fmt.Sprintf(translate(ctx, skippedNote), skipped), nil)
 }
+
+const skippedNote = "%d recording(s) are still being saved and were left out. Run /download again in a few minutes to include them."
 
 func (a *app) sendDocument(ctx context.Context, chatID int64, filename string, data []byte) error {
 	var body bytes.Buffer

@@ -103,6 +103,35 @@ func TestBuildZipsSplits(t *testing.T) {
 	}
 }
 
+// A recording that cannot be fetched yet is left out; the rest still export, and all skipped emits nothing.
+func TestBuildZipsSkips(t *testing.T) {
+	items := []exportItem{{Key: "a", Path: "a.wav"}, {Key: "pending", Path: "p.wav"}, {Key: "b", Path: "b.wav"}}
+	convert := func(key string) ([]byte, error) {
+		if key == "pending" {
+			return nil, errSkipItem
+		}
+		return []byte(key), nil
+	}
+	var names []string
+	err := buildZips(items, 1<<20, convert, func(data []byte, part int, last bool) error {
+		zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			return err
+		}
+		for _, f := range zr.File {
+			names = append(names, f.Name)
+		}
+		return nil
+	})
+	if err != nil || fmt.Sprint(names) != "[a.wav b.wav]" {
+		t.Fatalf("names=%v err=%v", names, err)
+	}
+	skipAll := func(string) ([]byte, error) { return nil, errSkipItem }
+	if err := buildZips(items, 1<<20, skipAll, func([]byte, int, bool) error { t.Error("emitted empty zip"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestOggToWAV(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg not installed")
