@@ -40,18 +40,12 @@ func TestExportBounds(t *testing.T) {
 func TestExportNames(t *testing.T) {
 	at := time.Date(2026, 11, 10, 21, 30, 5, 0, time.UTC) // 01:00:05 on the 11th in Tehran
 	const pair = "0123456789abcdef0123456789abcdef"
-	for _, c := range []struct {
-		kind  string
-		dated bool
-		want  string
-	}{
-		{"sleepy", true, "2026-11-11/sleepy/010005_01234567_Sleepy-40123456.wav"},
-		{"awake", true, "2026-11-11/fresh/010005_01234567_fresh-40123456.wav"},
-		{"sleepy", false, "sleepy/010005_01234567_Sleepy-40123456.wav"},
-		{"awake", false, "fresh/010005_01234567_fresh-40123456.wav"},
+	for _, c := range []struct{ kind, want string }{
+		{"sleepy", "2026-11-11/sleepy/010005_01234567_Sleepy-40123456.wav"},
+		{"awake", "2026-11-11/fresh/010005_01234567_fresh-40123456.wav"},
 	} {
-		if got := exportPath(at, pair, c.kind, "40123456", c.dated); got != c.want {
-			t.Errorf("path(%s, dated=%v) = %q, want %q", c.kind, c.dated, got, c.want)
+		if got := exportPath(at, pair, c.kind, "40123456"); got != c.want {
+			t.Errorf("path(%s) = %q, want %q", c.kind, got, c.want)
 		}
 	}
 	for _, c := range []struct {

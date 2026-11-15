@@ -63,12 +63,11 @@ type exportItem struct {
 	At   time.Time
 }
 
-// exportPath places a recording at [YYYY-MM-DD/]<fresh|sleepy>/HHMMSS_<pair>_<Sleepy|fresh>-<student number>.wav.
+// exportPath places a recording at YYYY-MM-DD/<fresh|sleepy>/HHMMSS_<pair>_<Sleepy|fresh>-<student number>.wav.
 // The course names files Sleepy-SID.wav or fresh-SID.wav (SID is the student number); a student records
 // many pairs a day, so the time and pair ID prefix keeps names unique and matches the two halves of a pair
-// across the fresh and sleepy folders. A single-day export (dated=false) has no day folder: fresh and
-// sleepy sit at the zip root.
-func exportPath(completed time.Time, pairID, kind, studentNumber string, dated bool) string {
+// across the fresh and sleepy folders. Every export, a single-day one included, has a day folder at the root.
+func exportPath(completed time.Time, pairID, kind, studentNumber string) string {
 	if len(pairID) > 8 {
 		pairID = pairID[:8]
 	}
@@ -77,11 +76,7 @@ func exportPath(completed time.Time, pairID, kind, studentNumber string, dated b
 		folder, prefix = "sleepy", "Sleepy"
 	}
 	t := completed.In(exportLoc)
-	path := folder + "/" + t.Format("150405") + "_" + pairID + "_" + prefix + "-" + studentNumber + ".wav"
-	if dated {
-		path = t.Format("2006-01-02") + "/" + path
-	}
-	return path
+	return t.Format("2006-01-02") + "/" + folder + "/" + t.Format("150405") + "_" + pairID + "_" + prefix + "-" + studentNumber + ".wav"
 }
 
 func exportFilename(kind string, now time.Time, part int, last bool) string {
@@ -175,8 +170,7 @@ func (a *app) fetchWAV(ctx context.Context, key string) ([]byte, error) {
 }
 
 // exportItems always filters by the caller's own user_id; callback data never carries IDs.
-// dated=false drops the day folder, for exports that cover a single day.
-func (a *app) exportItems(ctx context.Context, userID int64, from, to time.Time, dated bool) ([]exportItem, error) {
+func (a *app) exportItems(ctx context.Context, userID int64, from, to time.Time) ([]exportItem, error) {
 	rows, err := a.db.Query(ctx, `SELECT p.completed_at,p.id,s.kind,s.object_key,pr.student_number FROM pairs p JOIN samples s ON s.pair_id=p.id JOIN profiles pr ON pr.user_id=p.user_id WHERE p.user_id=$1 AND p.status='complete' AND p.completed_at>=$2 AND p.completed_at<$3 ORDER BY p.completed_at,p.id,s.kind`, userID, from, to)
 	if err != nil {
 		return nil, err
@@ -189,7 +183,7 @@ func (a *app) exportItems(ctx context.Context, userID int64, from, to time.Time,
 		if err := rows.Scan(&at, &id, &kind, &key, &student); err != nil {
 			return nil, err
 		}
-		items = append(items, exportItem{Key: key, Path: exportPath(at, id, kind, student, dated), At: at})
+		items = append(items, exportItem{Key: key, Path: exportPath(at, id, kind, student), At: at})
 	}
 	return items, rows.Err()
 }
@@ -217,7 +211,7 @@ func (a *app) export(ctx context.Context, userID int64, kind string) error {
 	if !ok {
 		return fmt.Errorf("unknown range %q", kind)
 	}
-	items, err := a.exportItems(ctx, userID, from, to, kind != "today")
+	items, err := a.exportItems(ctx, userID, from, to)
 	if err != nil {
 		return err
 	}
