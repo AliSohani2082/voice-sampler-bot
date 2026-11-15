@@ -59,21 +59,24 @@ func exportBounds(kind string, now time.Time) (from, to time.Time, ok bool) {
 
 type exportItem struct {
 	Key  string // S3 object key
-	Path string // path inside the zip: YYYY-MM-DD/HHMMSS_<pair>/<Sleepy|fresh>-<student number>.wav
+	Path string // path inside the zip, see exportPath
 	At   time.Time
 }
 
-// exportPath names a recording as the course requires: Sleepy-SID.wav or fresh-SID.wav (SID is the student
-// number). A student has many pairs, so each pair gets its own folder to keep the file names unique.
+// exportPath places a recording at YYYY-MM-DD/<fresh|sleepy>/HHMMSS_<pair>_<Sleepy|fresh>-<student number>.wav.
+// The course names files Sleepy-SID.wav or fresh-SID.wav (SID is the student number); a student records
+// many pairs a day, so the time and pair ID prefix keeps names unique and matches the two halves of a pair
+// across the fresh and sleepy folders. Every export, a single-day one included, has a day folder at the root.
 func exportPath(completed time.Time, pairID, kind, studentNumber string) string {
 	if len(pairID) > 8 {
 		pairID = pairID[:8]
 	}
-	prefix := "fresh"
+	folder, prefix := "fresh", "fresh"
 	if kind == "sleepy" {
-		prefix = "Sleepy"
+		folder, prefix = "sleepy", "Sleepy"
 	}
-	return completed.In(exportLoc).Format("2006-01-02/150405") + "_" + pairID + "/" + prefix + "-" + studentNumber + ".wav"
+	t := completed.In(exportLoc)
+	return t.Format("2006-01-02") + "/" + folder + "/" + t.Format("150405") + "_" + pairID + "_" + prefix + "-" + studentNumber + ".wav"
 }
 
 func exportFilename(kind string, now time.Time, part int, last bool) string {
