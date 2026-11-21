@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
@@ -38,54 +39,103 @@ func TestExportBounds(t *testing.T) {
 }
 
 func TestExportNames(t *testing.T) {
-	at := time.Date(2026, 11, 10, 21, 30, 5, 0, time.UTC) // 01:00:05 on the 11th in Tehran
-	const pair = "0123456789abcdef0123456789abcdef"
-	for _, c := range []struct{ kind, want string }{
-		{"sleepy", "2026-11-11/sleepy/010005_01234567_Sleepy-40123456.wav"},
-		{"awake", "2026-11-11/fresh/010005_01234567_fresh-40123456.wav"},
-	} {
-		if got := exportPath(at, pair, c.kind, "40123456"); got != c.want {
-			t.Errorf("path(%s) = %q, want %q", c.kind, got, c.want)
+	for _, c := range []struct {
+		kind string
+		n    int
+		want string
+	}{{"sleepy", 24, "sleepy/40507844-24.wav"}, {"awake", 24, "fresh/40507844-24.wav"}, {"awake", 1, "fresh/40507844-1.wav"}} {
+		if got := exportPath(c.kind, "40507844", c.n); got != c.want {
+			t.Errorf("path(%s,%d) = %q, want %q", c.kind, c.n, got, c.want)
 		}
 	}
 	for _, c := range []struct {
-		part int
-		last bool
-		want string
-	}{{1, true, "voices_week_2026-11-11.zip"}, {1, false, "voices_week_2026-11-11_part1.zip"}, {2, true, "voices_week_2026-11-11_part2.zip"}} {
-		if got := exportFilename("week", at, c.part, c.last); got != c.want {
-			t.Errorf("filename(%d,%v) = %q, want %q", c.part, c.last, got, c.want)
+		first, last, kind string
+		part              int
+		isLast            bool
+		want              string
+	}{
+		{"Ali", "Sohani", "week", 1, true, "Ali_Sohani_week.zip"},
+		{"Ali", "Sohani", "all", 1, false, "Ali_Sohani_all_part1.zip"},
+		{"Ali", "Sohani", "today", 2, true, "Ali_Sohani_today_part2.zip"},
+		{"Mohammad Ali", " Sohani  Shahrood ", "week", 1, true, "Mohammad_Ali_Sohani_Shahrood_week.zip"},
+		{"علی", "سهانی نژاد", "all", 1, true, "علی_سهانی_نژاد_all.zip"},
+		{"A/b", "C:d", "all", 1, true, "Ab_Cd_all.zip"},
+		{"", "", "all", 1, true, "voices_all.zip"},
+	} {
+		if got := exportFilename(c.first, c.last, c.kind, c.part, c.isLast); got != c.want {
+			t.Errorf("filename(%q,%q,%s,%d,%v) = %q, want %q", c.first, c.last, c.kind, c.part, c.isLast, got, c.want)
+		}
+	}
+}
+
+func pairGroup(i int) []exportItem {
+	return []exportItem{
+		{Key: fmt.Sprintf("s%d", i), Path: exportPath("sleepy", "40507844", i)},
+		{Key: fmt.Sprintf("f%d", i), Path: exportPath("awake", "40507844", i)},
+	}
+}
+
+func zipNames(t *testing.T, data []byte) []string {
+	t.Helper()
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, f := range zr.File {
+		names = append(names, f.Name)
+	}
+	return names
+}
+
+// Every part has only sleepy/ and fresh/ at the root, with the same names in both.
+func checkMirrored(t *testing.T, names []string) {
+	t.Helper()
+	sleepy, fresh := map[string]bool{}, map[string]bool{}
+	for _, n := range names {
+		dir, file, ok := strings.Cut(n, "/")
+		switch {
+		case !ok || strings.Contains(file, "/"):
+			t.Errorf("unexpected path %q", n)
+		case dir == "sleepy":
+			sleepy[file] = true
+		case dir == "fresh":
+			fresh[file] = true
+		default:
+			t.Errorf("unexpected folder in %q", n)
+		}
+	}
+	if len(sleepy) != len(fresh) {
+		t.Errorf("sleepy has %d files, fresh has %d", len(sleepy), len(fresh))
+	}
+	for f := range sleepy {
+		if !fresh[f] {
+			t.Errorf("%s in sleepy but not in fresh", f)
 		}
 	}
 }
 
 func TestBuildZipsSplits(t *testing.T) {
 	rnd := rand.New(rand.NewSource(1))
-	var items []exportItem
-	for i := 0; i < 5; i++ {
-		items = append(items, exportItem{Key: fmt.Sprint(i), Path: fmt.Sprintf("2026-01-01/%06d_x_awake.wav", i)})
+	var groups [][]exportItem
+	for i := 1; i <= 5; i++ {
+		groups = append(groups, pairGroup(i))
 	}
-	convert := func(string) ([]byte, error) { b := make([]byte, 1000); rnd.Read(b); return b, nil } // incompressible
+	convert := func(exportItem) ([]byte, error) { b := make([]byte, 1000); rnd.Read(b); return b, nil } // incompressible
 	var parts [][]string
 	var lasts []bool
-	err := buildZips(items, 2500, convert, func(data []byte, part int, last bool) error {
-		zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-		if err != nil {
-			return err
-		}
-		var names []string
-		for _, f := range zr.File {
-			names = append(names, f.Name)
-		}
+	skipped, err := buildZips(groups, 4500, convert, func(data []byte, part int, last bool) error {
+		names := zipNames(t, data)
+		checkMirrored(t, names)
 		parts = append(parts, names)
 		lasts = append(lasts, last)
-		if part != len(parts) || len(data) > 2500+1000 {
+		if part != len(parts) || len(data) > 4500+2000 {
 			t.Errorf("part %d size %d", part, len(data))
 		}
 		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || skipped != 0 {
+		t.Fatalf("skipped=%d err=%v", skipped, err)
 	}
 	if len(parts) < 2 || lasts[0] || !lasts[len(lasts)-1] {
 		t.Fatalf("parts=%v lasts=%v", parts, lasts)
@@ -94,41 +144,41 @@ func TestBuildZipsSplits(t *testing.T) {
 	for _, p := range parts {
 		n += len(p)
 	}
-	if n != len(items) {
-		t.Fatalf("%d files in zips, want %d", n, len(items))
+	if n != 10 {
+		t.Fatalf("%d files in zips, want 10", n)
 	}
 	// Nothing to export builds no zip.
-	if err := buildZips(nil, 100, convert, func([]byte, int, bool) error { t.Error("emitted empty zip"); return nil }); err != nil {
+	if _, err := buildZips(nil, 100, convert, func([]byte, int, bool) error { t.Error("emitted empty zip"); return nil }); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// A recording that cannot be fetched yet is left out; the rest still export, and all skipped emits nothing.
+// A pair with an unfetchable recording is left out whole; the rest still export, and all skipped emits nothing.
 func TestBuildZipsSkips(t *testing.T) {
-	items := []exportItem{{Key: "a", Path: "a.wav"}, {Key: "pending", Path: "p.wav"}, {Key: "b", Path: "b.wav"}}
-	convert := func(key string) ([]byte, error) {
-		if key == "pending" {
+	groups := [][]exportItem{pairGroup(1), pairGroup(2), pairGroup(3)}
+	convert := func(it exportItem) ([]byte, error) {
+		if it.Key == "f2" {
 			return nil, errSkipItem
 		}
-		return []byte(key), nil
+		return []byte(it.Key), nil
 	}
 	var names []string
-	err := buildZips(items, 1<<20, convert, func(data []byte, part int, last bool) error {
-		zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-		if err != nil {
-			return err
-		}
-		for _, f := range zr.File {
-			names = append(names, f.Name)
-		}
+	skipped, err := buildZips(groups, 1<<20, convert, func(data []byte, part int, last bool) error {
+		names = append(names, zipNames(t, data)...)
 		return nil
 	})
-	if err != nil || fmt.Sprint(names) != "[a.wav b.wav]" {
-		t.Fatalf("names=%v err=%v", names, err)
+	if err != nil || skipped != 1 {
+		t.Fatalf("skipped=%d err=%v", skipped, err)
 	}
-	skipAll := func(string) ([]byte, error) { return nil, errSkipItem }
-	if err := buildZips(items, 1<<20, skipAll, func([]byte, int, bool) error { t.Error("emitted empty zip"); return nil }); err != nil {
-		t.Fatal(err)
+	checkMirrored(t, names)
+	want := "[sleepy/40507844-1.wav fresh/40507844-1.wav sleepy/40507844-3.wav fresh/40507844-3.wav]"
+	if fmt.Sprint(names) != want {
+		t.Fatalf("names=%v", names)
+	}
+	skipAll := func(exportItem) ([]byte, error) { return nil, errSkipItem }
+	skipped, err = buildZips(groups, 1<<20, skipAll, func([]byte, int, bool) error { t.Error("emitted empty zip"); return nil })
+	if err != nil || skipped != 3 {
+		t.Fatalf("skipped=%d err=%v", skipped, err)
 	}
 }
 

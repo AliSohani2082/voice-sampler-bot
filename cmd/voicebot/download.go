@@ -72,36 +72,58 @@ type exportItem struct {
 	At     time.Time
 }
 
-// exportPath places a recording at YYYY-MM-DD/<fresh|sleepy>/HHMMSS_<pair>_<Sleepy|fresh>-<student number>.wav.
-// The course names files Sleepy-SID.wav or fresh-SID.wav (SID is the student number); a student records
-// many pairs a day, so the time and pair ID prefix keeps names unique and matches the two halves of a pair
-// across the fresh and sleepy folders. Every export, a single-day one included, has a day folder at the root.
-func exportPath(completed time.Time, pairID, kind, studentNumber string) string {
-	if len(pairID) > 8 {
-		pairID = pairID[:8]
-	}
-	folder, prefix := "fresh", "fresh"
+// exportPath places a recording at <sleepy|fresh>/<student number>-<n>.wav. n is the pair's running number among
+// all of the student's completed pairs, so the sleepy and fresh files of one pair share a name in the two
+// folders and a pair keeps its name in every export (all, week or day).
+func exportPath(kind, studentNumber string, n int) string {
+	folder := "fresh"
 	if kind == "sleepy" {
-		folder, prefix = "sleepy", "Sleepy"
+		folder = "sleepy"
 	}
-	t := completed.In(exportLoc)
-	return t.Format("2006-01-02") + "/" + folder + "/" + t.Format("150405") + "_" + pairID + "_" + prefix + "-" + studentNumber + ".wav"
+	return fmt.Sprintf("%s/%s-%d.wav", folder, studentNumber, n)
 }
 
-func exportFilename(kind string, now time.Time, part int, last bool) string {
+// exportBase turns the profile name into the zip's base name: first and last name joined by "_", with spaces
+// inside either name also becoming "_". Non-Latin names are kept as written.
+func exportBase(first, last string) string {
+	clean := func(s string) string {
+		s = strings.Map(func(r rune) rune {
+			if r < 32 || strings.ContainsRune(`/\:*?"<>|`, r) {
+				return -1
+			}
+			return r
+		}, s)
+		return strings.Join(strings.Fields(s), "_")
+	}
+	var parts []string
+	for _, p := range []string{clean(first), clean(last)} {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	if len(parts) == 0 {
+		return "voices"
+	}
+	return strings.Join(parts, "_")
+}
+
+// exportFilename is <first>_<last>_<range>.zip, with _partN added when the export is split.
+func exportFilename(first, last, kind string, part int, isLast bool) string {
 	suffix := ""
-	if part > 1 || !last {
+	if part > 1 || !isLast {
 		suffix = fmt.Sprintf("_part%d", part)
 	}
-	return fmt.Sprintf("voices_%s_%s%s.zip", kind, now.In(exportLoc).Format("2006-01-02"), suffix)
+	return fmt.Sprintf("%s_%s%s.zip", exportBase(first, last), kind, suffix)
 }
 
-// buildZips streams items into zips of at most limit bytes (split on file boundaries, in order, so a day
-// only splits when a part fills mid-day) and hands each finished zip to emit before building the next.
-func buildZips(items []exportItem, limit int, convert func(key string) ([]byte, error), emit func(data []byte, part int, last bool) error) error {
+// buildZips streams groups into zips of at most limit bytes and hands each finished zip to emit before building
+// the next. A group (the sleepy and fresh files of one pair) is never split across zips, and if any file of a
+// group cannot be fetched the whole group is left out, so the sleepy and fresh folders always match. It returns
+// the number of groups left out.
+func buildZips(groups [][]exportItem, limit int, convert func(it exportItem) ([]byte, error), emit func(data []byte, part int, last bool) error) (int, error) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	part, n := 1, 0
+	part, n, skipped := 1, 0, 0
 	flush := func(last bool) error {
 		if err := zw.Close(); err != nil {
 			return err
@@ -114,35 +136,45 @@ func buildZips(items []exportItem, limit int, convert func(key string) ([]byte, 
 		part, n = part+1, 0
 		return nil
 	}
-	for _, it := range items {
-		wav, err := convert(it.Key)
-		if errors.Is(err, errSkipItem) {
-			continue
-		}
-		if err != nil {
-			return err
+groups:
+	for _, g := range groups {
+		wavs := make([][]byte, len(g))
+		size := 0
+		for i, it := range g {
+			wav, err := convert(it)
+			if errors.Is(err, errSkipItem) {
+				skipped++
+				continue groups
+			}
+			if err != nil {
+				return skipped, err
+			}
+			wavs[i] = wav
+			size += len(wav)
 		}
 		if err := zw.Flush(); err != nil {
-			return err
+			return skipped, err
 		}
-		if n > 0 && buf.Len()+len(wav) > limit {
+		if n > 0 && buf.Len()+size > limit {
 			if err := flush(false); err != nil {
-				return err
+				return skipped, err
 			}
 		}
-		w, err := zw.CreateHeader(&zip.FileHeader{Name: it.Path, Method: zip.Deflate, Modified: it.At})
-		if err != nil {
-			return err
-		}
-		if _, err := w.Write(wav); err != nil {
-			return err
+		for i, it := range g {
+			w, err := zw.CreateHeader(&zip.FileHeader{Name: it.Path, Method: zip.Deflate, Modified: it.At})
+			if err != nil {
+				return skipped, err
+			}
+			if _, err := w.Write(wavs[i]); err != nil {
+				return skipped, err
+			}
 		}
 		n++
 	}
 	if n == 0 {
-		return nil
+		return skipped, nil
 	}
-	return flush(true)
+	return skipped, flush(true)
 }
 
 // fixWAVSizes fills in the RIFF/data sizes ffmpeg leaves as 0xFFFFFFFF when writing to a pipe.
@@ -193,24 +225,46 @@ func (a *app) fetchWAV(ctx context.Context, it exportItem) ([]byte, error) {
 	return oggToWAV(ctx, ogg)
 }
 
-// exportItems always filters by the caller's own user_id; callback data never carries IDs.
-func (a *app) exportItems(ctx context.Context, userID int64, from, to time.Time) ([]exportItem, error) {
-	rows, err := a.db.Query(ctx, `SELECT p.completed_at,p.id,s.kind,s.object_key,s.telegram_file_id,s.stored,pr.student_number FROM pairs p JOIN samples s ON s.pair_id=p.id JOIN profiles pr ON pr.user_id=p.user_id WHERE p.user_id=$1 AND p.status='complete' AND p.completed_at>=$2 AND p.completed_at<$3 ORDER BY p.completed_at,p.id,s.kind`, userID, from, to)
+// exportData is one user's export: their profile name for the zip name, and the recordings grouped by pair.
+type exportData struct {
+	First, Last string
+	Groups      [][]exportItem
+}
+
+// exportItems always filters by the caller's own user_id; callback data never carries IDs. The running number is
+// counted over all of the user's completed pairs before the range filter, so it does not depend on the range.
+// A pair missing either recording is left out so the two folders stay equal.
+func (a *app) exportItems(ctx context.Context, userID int64, from, to time.Time) (exportData, error) {
+	var d exportData
+	rows, err := a.db.Query(ctx, `SELECT p.n,p.completed_at,p.id,s.kind,s.object_key,s.telegram_file_id,s.stored,pr.student_number,pr.first_name,pr.last_name FROM (SELECT id,completed_at,row_number() OVER (ORDER BY completed_at,id) AS n FROM pairs WHERE user_id=$1 AND status='complete') p JOIN samples s ON s.pair_id=p.id JOIN profiles pr ON pr.user_id=$1 WHERE p.completed_at>=$2 AND p.completed_at<$3 ORDER BY p.n,s.kind`, userID, from, to)
 	if err != nil {
-		return nil, err
+		return d, err
 	}
 	defer rows.Close()
-	var items []exportItem
+	byPair := map[string][]exportItem{}
+	var order []string
 	for rows.Next() {
+		var n int
 		var at time.Time
 		var id, kind, key, fileID, student string
 		var stored bool
-		if err := rows.Scan(&at, &id, &kind, &key, &fileID, &stored, &student); err != nil {
-			return nil, err
+		if err := rows.Scan(&n, &at, &id, &kind, &key, &fileID, &stored, &student, &d.First, &d.Last); err != nil {
+			return d, err
 		}
-		items = append(items, exportItem{Key: key, FileID: fileID, Stored: stored, Path: exportPath(at, id, kind, student), At: at})
+		if _, ok := byPair[id]; !ok {
+			order = append(order, id)
+		}
+		byPair[id] = append(byPair[id], exportItem{Key: key, FileID: fileID, Stored: stored, Path: exportPath(kind, student, n), At: at})
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return d, err
+	}
+	for _, id := range order {
+		if g := byPair[id]; len(g) == 2 {
+			d.Groups = append(d.Groups, g)
+		}
+	}
+	return d, nil
 }
 
 // startExport runs in the background so the update loop keeps polling; one export per user at a time.
@@ -236,38 +290,28 @@ func (a *app) export(ctx context.Context, userID int64, kind string) error {
 	if !ok {
 		return fmt.Errorf("unknown range %q", kind)
 	}
-	items, err := a.exportItems(ctx, userID, from, to)
+	data, err := a.exportItems(ctx, userID, from, to)
 	if err != nil {
 		return err
 	}
-	if len(items) == 0 {
+	if len(data.Groups) == 0 {
 		return a.send(ctx, userID, "You have no submitted recordings in that range.", nil)
 	}
 	if err := a.send(ctx, userID, "Preparing your file… this can take a minute.", nil); err != nil {
 		return err
 	}
-	byKey := make(map[string]exportItem, len(items))
-	for _, it := range items {
-		byKey[it.Key] = it
-	}
-	skipped := 0
-	convert := func(key string) ([]byte, error) {
-		wav, err := a.fetchWAV(ctx, byKey[key])
-		if errors.Is(err, errSkipItem) {
-			skipped++
-		}
-		return wav, err
-	}
-	err = buildZips(items, zipPartLimit, convert, func(data []byte, part int, last bool) error {
+	convert := func(it exportItem) ([]byte, error) { return a.fetchWAV(ctx, it) }
+	skipped, err := buildZips(data.Groups, zipPartLimit, convert, func(zipData []byte, part int, last bool) error {
 		if part == 1 && !last {
 			_ = a.send(ctx, userID, "Your export is large, so it will arrive as several zip files.", nil)
 		}
-		return a.sendDocument(ctx, userID, exportFilename(kind, now, part, last), data)
+		return a.sendDocument(ctx, userID, exportFilename(data.First, data.Last, kind, part, last), zipData)
 	})
 	if err != nil || skipped == 0 {
 		return err
 	}
-	return a.send(ctx, userID, fmt.Sprintf(translate(ctx, skippedNote), skipped), nil)
+	// Each skipped pair leaves out two recordings.
+	return a.send(ctx, userID, fmt.Sprintf(translate(ctx, skippedNote), skipped*2), nil)
 }
 
 const skippedNote = "%d recording(s) are still being saved and were left out. Run /download again in a few minutes to include them."
